@@ -500,7 +500,7 @@ async function buildExperience(exp, slot, onProgress) {
   ensureDioramaPartsVisible(model);
   stabilizeTowerPivot(model);
   let logoMesh = detachLogoForFitting(model, exp);
-  if (!exp.glbBounds) preNormalizeModel(model);
+  preNormalizeModel(model);
   prepareModel(model);
   logoMesh = optimizeModelForDevice(model, logoMesh, exp);
   fitModel(
@@ -511,7 +511,6 @@ async function buildExperience(exp, slot, onProgress) {
     exp.fitBounds,
     exp.fitHeightFactor,
     logoMesh !== null,
-    exp.glbBounds,
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
@@ -538,6 +537,11 @@ async function buildExperience(exp, slot, onProgress) {
 
 function getFitBox(model, fitBounds, excludeLogoMesh = false) {
   model.updateMatrixWorld(true);
+
+  if ((model.name || '').startsWith('tripo_node')) {
+    const rootBox = new THREE.Box3().setFromObject(model);
+    if (!rootBox.isEmpty()) return rootBox;
+  }
 
   if (fitBounds === 'diorama') {
     const tripo = findDioramaRoot(model);
@@ -580,35 +584,14 @@ function getFitBox(model, fitBounds, excludeLogoMesh = false) {
   return found ? box : new THREE.Box3().setFromObject(model);
 }
 
-function fitModelBaked(model, glbBounds, bannerWidth, fitMode = 'center') {
-  const { width, height, centerX, centerY, centerZ, minY } = glbBounds;
-  model.position.set(-centerX, -centerY, -centerZ);
-  if (fitMode === 'ground') {
-    model.position.y = -minY;
-  }
-  const scale = bannerWidth / Math.max(width, 0.0001);
-  model.scale.setScalar(scale);
-  console.info('[AR] fitModelBaked', {
-    bannerWidth,
-    scale: scale.toFixed(4),
-    fitMode,
-    worldH: (height * scale).toFixed(3),
-  });
-}
-
-function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor, excludeLogoMesh = false, glbBounds = null) {
-  if (glbBounds?.width) {
-    fitModelBaked(model, glbBounds, modelScale, fitMode);
-    return;
-  }
-
+function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor, excludeLogoMesh = false) {
   const box = getFitBox(model, fitBounds, excludeLogoMesh);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
 
   if (size.length() < 0.0001) {
     console.warn('[AR] fitModel: empty bounds, using fallback scale');
-    model.scale.setScalar(modelScale * 0.15);
+    model.scale.setScalar(modelScale * 0.12);
     return;
   }
 
@@ -629,14 +612,9 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
       break;
   }
 
-  // modelScale = target width as a fraction of the MindAR banner (1 unit wide).
   let scaleBase;
-  if (fitBounds === 'diorama' && fitMode === 'ground') {
-    scaleBase = size.x;
-  } else if (fitMode === 'facade' || fitMode === 'center') {
+  if (fitMode === 'facade' || fitMode === 'center') {
     scaleBase = Math.max(size.x, size.y * (fitHeightFactor ?? 0.88));
-  } else if (fitMode === 'diorama') {
-    scaleBase = Math.max(size.x, size.y * 0.92);
   } else {
     scaleBase = Math.max(size.x, size.y, size.z);
   }
@@ -644,10 +622,9 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   const scale = modelScale / Math.max(scaleBase, 0.0001);
   model.scale.setScalar(scale);
   console.info('[AR] fitModel', {
-    bannerWidth: modelScale,
+    modelScale,
     bounds: `${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)}`,
     scale: scale.toFixed(4),
-    worldWidth: (size.x * scale).toFixed(3),
   });
 }
 
@@ -1167,42 +1144,17 @@ async function initAR() {
   configureRenderer(renderer);
 
   const slots = [];
-  const _smoothTmp = {
-    rawPos: new THREE.Vector3(),
-    rawQuat: new THREE.Quaternion(),
-    rawMat: new THREE.Matrix4(),
-    smoothMat: new THREE.Matrix4(),
-    invRaw: new THREE.Matrix4(),
-    localMat: new THREE.Matrix4(),
-    unitScale: new THREE.Vector3(1, 1, 1),
-    decompScale: new THREE.Vector3(),
-  };
-
   for (let i = 0; i < slotCount; i++) {
     const exp = experienceForTarget(EXPERIENCES, i);
     const anchor = mindar.addAnchor(i);
-    const smoothRig = new THREE.Group();
-    smoothRig.name = 'smooth-rig';
     const marker = new THREE.Object3D();
     const attachRig = new THREE.Group();
     attachRig.name = 'attach-rig';
     const off = getMarkerOffset(exp);
     marker.position.set(off.x, off.y, off.z);
     marker.add(attachRig);
-    smoothRig.add(marker);
-    anchor.group.add(smoothRig);
-    slots.push({
-      anchor,
-      smoothRig,
-      marker,
-      attachRig,
-      targetIndex: i,
-      experience: exp,
-      smoothWorldPos: new THREE.Vector3(),
-      smoothWorldQuat: new THREE.Quaternion(),
-      smoothReady: false,
-      lostSmoothTimer: null,
-    });
+    anchor.group.add(marker);
+    slots.push({ anchor, marker, attachRig, targetIndex: i, experience: exp });
   }
 
   scene.add(new THREE.AmbientLight(0xffffff, 1.65));
@@ -1226,105 +1178,14 @@ async function initAR() {
   let orientationBusy = false;
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
-  let lockedTargetIndex = null;
-  let lockedSlot = null;
-  let smoothFrameCount = 0;
-  let sessionTargetLocked = false;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
 
   const applyUserTransform = (slot) => {
     if (!slot) return;
-    const z = zoom.getZoom();
-    const yOff = position.getYOffset();
-    const off = getMarkerOffset(slot.experience);
-    slot.marker.position.set(off.x, off.y + yOff, off.z);
-    slot.attachRig.position.set(0, 0, 0);
-    slot.attachRig.scale.set(1, 1, 1);
-    const holder = slot.attachRig.children[0];
-    if (holder) {
-      holder.position.set(0, 0, 0);
-      holder.scale.setScalar(z);
-    }
-  };
-
-  const resetSlotSmoothing = (slot) => {
-    if (!slot) return;
-    clearTimeout(slot.lostSmoothTimer);
-    slot.lostSmoothTimer = null;
-    slot.smoothReady = false;
-    slot.smoothRig.position.set(0, 0, 0);
-    slot.smoothRig.quaternion.identity();
-    slot.smoothRig.scale.set(1, 1, 1);
-  };
-
-  const scheduleSmoothingReset = (slot) => {
-    if (!slot) return;
-    clearTimeout(slot.lostSmoothTimer);
-    slot.lostSmoothTimer = setTimeout(() => {
-      if (!found.has(slot)) resetSlotSmoothing(slot);
-    }, AR_SETTINGS.targetLostSmoothResetMs ?? 900);
-  };
-
-  const applyAnchorSmoothing = () => {
-    const warmup = smoothFrameCount < (AR_SETTINGS.smoothWarmupFrames ?? 24);
-    const posAlpha = warmup ? (AR_SETTINGS.posSmooth ?? 0.018) * 0.55 : (AR_SETTINGS.posSmooth ?? 0.018);
-    const rotAlpha = warmup ? (AR_SETTINGS.rotSmooth ?? 0.018) * 0.55 : (AR_SETTINGS.rotSmooth ?? 0.018);
-    const maxPos = AR_SETTINGS.maxPosDelta ?? 0.005;
-    const maxRot = AR_SETTINGS.maxRotDelta ?? 0.03;
-
-    slots.forEach((slot) => {
-      if (!found.has(slot)) return;
-      if (activeSlot && slot !== activeSlot) return;
-
-      const anchor = slot.anchor.group;
-      anchor.updateMatrixWorld(true);
-      anchor.getWorldPosition(_smoothTmp.rawPos);
-      anchor.getWorldQuaternion(_smoothTmp.rawQuat);
-
-      if (!slot.smoothReady) {
-        slot.smoothWorldPos.copy(_smoothTmp.rawPos);
-        slot.smoothWorldQuat.copy(_smoothTmp.rawQuat);
-        slot.smoothReady = true;
-        slot.smoothRig.position.set(0, 0, 0);
-        slot.smoothRig.quaternion.identity();
-        slot.smoothRig.scale.set(1, 1, 1);
-        return;
-      }
-
-      const prevPos = slot.smoothWorldPos.clone();
-      const prevQuat = slot.smoothWorldQuat.clone();
-      slot.smoothWorldPos.lerp(_smoothTmp.rawPos, posAlpha);
-      slot.smoothWorldQuat.slerp(_smoothTmp.rawQuat, rotAlpha);
-
-      const posStep = slot.smoothWorldPos.distanceTo(prevPos);
-      if (posStep > maxPos) {
-        slot.smoothWorldPos.lerpVectors(prevPos, slot.smoothWorldPos, maxPos / posStep);
-      }
-
-      const rotStep = prevQuat.angleTo(slot.smoothWorldQuat);
-      if (rotStep > maxRot) {
-        slot.smoothWorldQuat.slerp(prevQuat, 1 - maxRot / Math.max(rotStep, 0.0001));
-      }
-
-      _smoothTmp.smoothMat.compose(
-        slot.smoothWorldPos,
-        slot.smoothWorldQuat,
-        _smoothTmp.unitScale,
-      );
-      _smoothTmp.rawMat.copy(anchor.matrixWorld);
-      _smoothTmp.invRaw.copy(_smoothTmp.rawMat).invert();
-      _smoothTmp.localMat.multiplyMatrices(_smoothTmp.invRaw, _smoothTmp.smoothMat);
-      _smoothTmp.localMat.decompose(
-        slot.smoothRig.position,
-        slot.smoothRig.quaternion,
-        _smoothTmp.decompScale,
-      );
-      slot.smoothRig.scale.set(1, 1, 1);
-    });
-
-    if (found.size > 0) smoothFrameCount += 1;
+    slot.attachRig.position.set(0, position.getYOffset(), 0);
+    slot.attachRig.scale.setScalar(zoom.getZoom());
   };
 
   const hideAllHolders = () => {
@@ -1351,7 +1212,7 @@ async function initAR() {
       });
       if (on) {
         ensureElephantVisible(model);
-        item.anim?.reset?.() || item.anim?.play();
+        item.anim?.play();
       } else {
         item.anim?.pause();
       }
@@ -1360,11 +1221,7 @@ async function initAR() {
     return true;
   };
 
-  const isSlotTracked = (slot) => {
-    if (!slot) return false;
-    if (found.has(slot)) return true;
-    return slots.some((s) => s.experience?.id === slot.experience?.id && found.has(s));
-  };
+  const isSlotTracked = (slot) => !!(slot && found.has(slot));
 
   const slotByExp = new Map();
   slots.forEach((slot) => {
@@ -1419,17 +1276,13 @@ async function initAR() {
       child.visible = true;
       if (child.isSkinnedMesh) child.frustumCulled = false;
     });
-    if (!entry.mountedOnce) {
-      entry.mountedOnce = true;
-      entry.anim?.reset?.();
-    }
     applyUserTransform(slot);
     setLoadStatus('');
     return true;
   };
 
   const ensureActiveVisible = async () => {
-    if (!activeSlot?.experience || !isSlotTracked(activeSlot)) return;
+    if (!activeSlot?.experience || !found.has(activeSlot)) return;
     await mountToSlot(activeSlot, activeSlot.experience.id);
     if (activeRegistry?.holder) {
       activeRegistry.holder.visible = true;
@@ -1437,7 +1290,6 @@ async function initAR() {
         child.visible = true;
         if (child.isSkinnedMesh) child.frustumCulled = false;
       });
-      activeRegistry.anim?.play?.();
     }
   };
 
@@ -1615,66 +1467,32 @@ async function initAR() {
   };
 
   const pickActive = () => {
-    const keepSessionLock = AR_SETTINGS.sessionLockTarget !== false;
-
-    if (lockedSlot) {
-      if (found.has(lockedSlot)) {
-        if (activeSlot !== lockedSlot) void setActive(lockedSlot);
-        else void ensureActiveVisible();
-      }
-      return;
-    }
-
     for (const idx of TARGET_PRIORITY) {
       const slot = slots.find((s) => s.targetIndex === idx && found.has(s));
-      if (!slot) continue;
-      lockedSlot = slot;
-      lockedTargetIndex = idx;
-      if (!sessionTargetLocked) smoothFrameCount = 0;
-      sessionTargetLocked = keepSessionLock;
-      void setActive(slot);
-      return;
+      if (slot) {
+        void setActive(slot);
+        return;
+      }
     }
-
-    if (!keepSessionLock) {
-      lockedSlot = null;
-      lockedTargetIndex = null;
-      smoothFrameCount = 0;
-      void setActive(null);
-    }
+    void setActive(null);
   };
 
   slots.forEach((slot) => {
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
-      clearTimeout(slot.lostSmoothTimer);
-      slot.lostSmoothTimer = null;
-      const wasFound = found.has(slot);
       found.add(slot);
-      const siblingsTracked = slots.some(
-        (s) => s !== slot && s.experience?.id === slot.experience?.id && found.has(s),
-      );
-      if (!wasFound && !siblingsTracked && !slot.smoothReady) resetSlotSmoothing(slot);
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
-      if (sessionTargetLocked && lockedSlot === slot) {
-        void ensureActiveVisible();
-      } else {
-        pickActive();
-      }
+      pickActive();
+      void ensureActiveVisible();
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
-      scheduleSmoothingReset(slot);
-      const stillTracked = slots.some((s) => s.experience?.id === slot.experience?.id && found.has(s));
-      if (activeSlot === slot && !stillTracked) {
+      if (activeSlot === slot) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
-          if (!isSlotTracked(activeSlot)) {
-            hideAllHolders();
-            hide('ar-controls');
-          }
+          if (!found.has(slot)) pickActive();
         }, AR_SETTINGS.targetLostDelayMs);
       }
     };
@@ -1746,9 +1564,7 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
-        applyAnchorSmoothing();
-        if (activeSlot) applyUserTransform(activeSlot);
-        if (activeRegistry?.anim && isSlotTracked(activeSlot)) {
+        if (activeRegistry?.anim && activeSlot && found.has(activeSlot)) {
           activeRegistry.anim.update(delta);
         }
         renderer.render(scene, camera);
