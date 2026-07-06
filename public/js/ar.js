@@ -483,7 +483,7 @@ async function buildExperience(exp, slot, onProgress) {
   const model = asset.scene;
   sanitizeScene(model);
   removeSkinnedRig(model, exp);
-  if (!exp.preserveSkinnedMeshes) resetSkeletonBindPose(model);
+  resetSkeletonBindPose(model);
   ensureDioramaPartsVisible(model);
   stabilizeTowerPivot(model);
   let logoMesh = detachLogoForFitting(model, exp);
@@ -504,19 +504,16 @@ async function buildExperience(exp, slot, onProgress) {
 
   if (slot) slot.attachRig.add(holder);
 
-  const anim = exp.playAnimation === false
-    ? null
-    : setupAnimations(
+  let anim = null;
+  if (exp.preferredAnimation && exp.preserveSkinnedMeshes) {
+    anim = setupElephantWalk(model, asset.animations, exp.preferredAnimation);
+  } else if (exp.playAnimation !== false) {
+    anim = setupAnimations(
       model,
       asset.animations,
       exp.animationExclude ?? [],
       exp.preferredAnimation ?? '',
     );
-
-  if (anim && exp.preserveSkinnedMeshes) {
-    model.traverse((child) => {
-      if (child.isSkinnedMesh) child.updateMatrixWorld(true);
-    });
   }
 
   return { holder, anim };
@@ -594,6 +591,35 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
     scaleBase = Math.max(size.x, size.y, size.z);
   }
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
+}
+
+function setupElephantWalk(model, clips, preferredClip = 'walk') {
+  if (!clips?.length) return null;
+  const clip = clips.find((c) => c.name.toLowerCase().includes(preferredClip.toLowerCase()));
+  if (!clip) {
+    console.warn('[AR] Walk clip not found');
+    return null;
+  }
+
+  let skinned = null;
+  model.traverse((child) => {
+    if (child.isSkinnedMesh && /elephant|mob/i.test(child.name || '')) skinned = child;
+  });
+  if (!skinned) {
+    console.warn('[AR] Elephant mesh not found');
+    return null;
+  }
+
+  const mixer = new THREE.AnimationMixer(skinned);
+  const action = mixer.clipAction(clip);
+  action.setLoop(THREE.LoopRepeat);
+  action.play();
+  console.info('[AR] Elephant walk started');
+  return {
+    update(delta) { mixer.update(delta); },
+    play() { action.paused = false; action.play(); },
+    pause() { action.paused = true; },
+  };
 }
 
 function setupAnimations(root, clips, excludeTracks = [], preferredClip = '') {
@@ -823,7 +849,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = 1;
+  const maxTrack = Math.min(slotCount, 2);
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
@@ -881,7 +907,6 @@ async function initAR() {
   let orientationBusy = false;
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
-  let appearFrames = 0;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1147,7 +1172,6 @@ async function initAR() {
     }
 
     activeSlot = slot;
-    appearFrames = 0;
     const mounted = await mountToSlot(slot, slot.experience.id);
     if (mounted) show('ar-controls');
   };
@@ -1167,7 +1191,6 @@ async function initAR() {
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
       found.add(slot);
-      appearFrames = 0;
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
@@ -1250,19 +1273,7 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
-        if (activeSlot && activeRegistry?.holder?.visible) {
-          if (appearFrames < AR_SETTINGS.scaleCalibrateFrames) {
-            appearFrames += 1;
-            const t = appearFrames / AR_SETTINGS.scaleCalibrateFrames;
-            const ease = t * t * (3 - 2 * t);
-            activeSlot.attachRig.scale.setScalar(
-              THREE.MathUtils.lerp(0.78, zoom.getZoom(), ease),
-            );
-            activeSlot.attachRig.position.y = position.getYOffset() * ease;
-          } else {
-            applyUserTransform(activeSlot);
-          }
-        }
+        if (activeSlot) applyUserTransform(activeSlot);
         if (activeRegistry?.anim && activeRegistry.holder.visible) {
           activeRegistry.anim.update(delta);
         }
