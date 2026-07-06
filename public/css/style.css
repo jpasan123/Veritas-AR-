@@ -1,7 +1,7 @@
 :root {
   --gold: #f5c842;
   --gold-light: #ffe9a3;
-  --purple-deep: #2d0a4e;
+  --purple-deep: #0a1628;
   --purple-glow: rgba(168, 85, 247, 0.45);
   --gold-glow: rgba(245, 200, 66, 0.55);
   --text: #fff8ef;
@@ -58,7 +58,7 @@ body {
   height: 100%;
   display: block;
   object-fit: cover;
-  object-position: center 46%;
+  object-position: center 38%;
   content-visibility: auto;
 }
 

@@ -1,7 +1,6 @@
 /**
- * MindAR targets — logo + banner for reliable scan.
+ * MindAR — banner only (stable single anchor).
  */
 module.exports = [
-  { id: 'veritas-logo', file: 'veritas-logo.png', mime: 'image/png' },
   { id: 'veritas-banner', file: 'veritas-banner.jpeg', mime: 'image/jpeg' },
 ];

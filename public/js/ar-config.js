@@ -1,13 +1,13 @@
 /**
- * Veritas AR — scan banner logo to see Sri Lanka diorama with walking elephant.
+ * Veritas AR — scan banner to see Sri Lanka diorama with walking elephant.
  */
 const LOCATIONS = {
   'veritas-ar': {
     id: 'veritas-ar',
-    targetIndices: [0, 1],
+    targetIndices: [0],
     modelSrc: 'assets/veritas-ar-plain.glb',
-    modelScale: 0.85,
-    modelOffset: { x: 0, y: 0.06, z: 0.03 },
+    modelScale: 0.88,
+    modelOffset: { x: 0, y: 0.04, z: 0 },
     fitMode: 'ground',
     fitBounds: 'diorama',
     fitLift: 0.35,
@@ -17,10 +17,10 @@ const LOCATIONS = {
     preserveSkinnedMeshes: true,
     skipMaterialLite: true,
     defaultUserZoom: 1,
-    defaultUserYOffset: 0.06,
+    defaultUserYOffset: 0.04,
     landscape: {
-      modelOffset: { x: 0, y: 0.06, z: 0.03 },
-      defaultUserYOffset: 0.06,
+      modelOffset: { x: 0, y: 0.04, z: 0 },
+      defaultUserYOffset: 0.04,
     },
   },
 };
@@ -29,27 +29,27 @@ export const MODES = {
   all: {
     targetSrc: 'targets.mind',
     experiences: [LOCATIONS['veritas-ar']],
-    targetPriority: [1, 0],
+    targetPriority: [0],
     facadeTargetIndices: [],
   },
 };
 
 export const AR_SETTINGS = {
-  posSmooth: 0.02,
-  rotSmooth: 0.02,
+  posSmooth: 0.09,
+  rotSmooth: 0.08,
   scaleSmooth: 0.03,
   scaleCalibrateFrames: 14,
   defaultUserZoom: 1,
   minUserZoom: 0.55,
   maxUserZoom: 1.8,
   zoomStep: 0.15,
-  defaultUserYOffset: 0.06,
+  defaultUserYOffset: 0.04,
   minUserYOffset: -0.2,
   maxUserYOffset: 0.35,
   positionStep: 0.06,
-  targetLostDelayMs: 3500,
-  filterMinCF: 0.0001,
-  filterBeta: 0.00025,
+  targetLostDelayMs: 4000,
+  filterMinCF: 0.00005,
+  filterBeta: 0.0012,
   minCameraZoom: 1,
   maxCameraZoom: 3,
   cameraZoomStep: 0.25,

@@ -630,17 +630,17 @@ function placeElephantOnDiorama(model) {
 
   const geoBox = new THREE.Box3().setFromBufferAttribute(skinned.geometry.attributes.position);
   const geoH = geoBox.getSize(new THREE.Vector3()).y;
-  const targetH = size.y * 0.2;
+  const targetH = size.y * 0.18;
   rig.scale.setScalar(targetH / Math.max(geoH, 0.001));
 
   const worldPos = new THREE.Vector3(
-    center.x + size.x * 0.04,
-    dBox.min.y + size.y * 0.018,
-    center.z + size.z * 0.26,
+    center.x,
+    dBox.min.y + size.y * 0.022,
+    center.z + size.z * 0.2,
   );
   model.worldToLocal(worldPos);
   rig.position.copy(worldPos);
-  rig.rotation.set(0, -0.55, 0);
+  rig.rotation.set(0, -0.35, 0);
 
   skinned.frustumCulled = false;
   skinned.renderOrder = 2;
@@ -1042,7 +1042,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = Math.min(slotCount, 2);
+  const maxTrack = 1;
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
@@ -1066,17 +1066,40 @@ async function initAR() {
   configureRenderer(renderer);
 
   const slots = [];
+  const _smoothTmp = {
+    rawPos: new THREE.Vector3(),
+    rawQuat: new THREE.Quaternion(),
+    rawMat: new THREE.Matrix4(),
+    smoothMat: new THREE.Matrix4(),
+    invRaw: new THREE.Matrix4(),
+    localMat: new THREE.Matrix4(),
+    unitScale: new THREE.Vector3(1, 1, 1),
+  };
+
   for (let i = 0; i < slotCount; i++) {
     const exp = experienceForTarget(EXPERIENCES, i);
     const anchor = mindar.addAnchor(i);
+    const smoothRig = new THREE.Group();
+    smoothRig.name = 'smooth-rig';
     const marker = new THREE.Object3D();
     const attachRig = new THREE.Group();
     attachRig.name = 'attach-rig';
     const off = getMarkerOffset(exp);
     marker.position.set(off.x, off.y, off.z);
     marker.add(attachRig);
-    anchor.group.add(marker);
-    slots.push({ anchor, marker, attachRig, targetIndex: i, experience: exp });
+    smoothRig.add(marker);
+    anchor.group.add(smoothRig);
+    slots.push({
+      anchor,
+      smoothRig,
+      marker,
+      attachRig,
+      targetIndex: i,
+      experience: exp,
+      smoothWorldPos: new THREE.Vector3(),
+      smoothWorldQuat: new THREE.Quaternion(),
+      smoothReady: false,
+    });
   }
 
   scene.add(new THREE.AmbientLight(0xffffff, 1.65));
@@ -1109,6 +1132,52 @@ async function initAR() {
     if (!slot) return;
     slot.attachRig.position.set(0, position.getYOffset(), 0);
     slot.attachRig.scale.setScalar(zoom.getZoom());
+  };
+
+  const resetSlotSmoothing = (slot) => {
+    if (!slot) return;
+    slot.smoothReady = false;
+    slot.smoothRig.position.set(0, 0, 0);
+    slot.smoothRig.quaternion.identity();
+    slot.smoothRig.scale.set(1, 1, 1);
+  };
+
+  const applyAnchorSmoothing = () => {
+    slots.forEach((slot) => {
+      if (!found.has(slot)) return;
+
+      const anchor = slot.anchor.group;
+      anchor.updateMatrixWorld(true);
+      anchor.getWorldPosition(_smoothTmp.rawPos);
+      anchor.getWorldQuaternion(_smoothTmp.rawQuat);
+
+      if (!slot.smoothReady) {
+        slot.smoothWorldPos.copy(_smoothTmp.rawPos);
+        slot.smoothWorldQuat.copy(_smoothTmp.rawQuat);
+        slot.smoothReady = true;
+        slot.smoothRig.position.set(0, 0, 0);
+        slot.smoothRig.quaternion.identity();
+        slot.smoothRig.scale.set(1, 1, 1);
+        return;
+      }
+
+      slot.smoothWorldPos.lerp(_smoothTmp.rawPos, AR_SETTINGS.posSmooth);
+      slot.smoothWorldQuat.slerp(_smoothTmp.rawQuat, AR_SETTINGS.rotSmooth);
+
+      _smoothTmp.smoothMat.compose(
+        slot.smoothWorldPos,
+        slot.smoothWorldQuat,
+        _smoothTmp.unitScale,
+      );
+      _smoothTmp.rawMat.copy(anchor.matrixWorld);
+      _smoothTmp.invRaw.copy(_smoothTmp.rawMat).invert();
+      _smoothTmp.localMat.multiplyMatrices(_smoothTmp.invRaw, _smoothTmp.smoothMat);
+      _smoothTmp.localMat.decompose(
+        slot.smoothRig.position,
+        slot.smoothRig.quaternion,
+        slot.smoothRig.scale,
+      );
+    });
   };
 
   const hideAllHolders = () => {
@@ -1415,6 +1484,7 @@ async function initAR() {
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
       found.add(slot);
+      resetSlotSmoothing(slot);
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
@@ -1422,6 +1492,7 @@ async function initAR() {
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
+      resetSlotSmoothing(slot);
       if (lockedTargetIndex === slot.targetIndex) lockedTargetIndex = null;
       const stillTracked = slots.some((s) => s.experience?.id === slot.experience?.id && found.has(s));
       if (activeSlot === slot && !stillTracked) {
@@ -1501,6 +1572,7 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
+        applyAnchorSmoothing();
         if (activeSlot) applyUserTransform(activeSlot);
         if (activeRegistry?.anim && isSlotTracked(activeSlot)) {
           activeRegistry.anim.update(delta);
