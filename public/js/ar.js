@@ -501,8 +501,7 @@ async function buildExperience(exp, slot, onProgress) {
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
-  placeElephantOnDiorama(model);
-  ensureElephantVisible(model);
+  consolidateElephantRig(model);
 
   if (slot) slot.attachRig.add(holder);
 
@@ -595,18 +594,35 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
 }
 
-function placeElephantOnDiorama(model) {
-  if (model.userData.elephantPlaced) return null;
+function rebindSkinnedMesh(skinned) {
+  if (!skinned?.skeleton) return;
+  skinned.skeleton.pose();
+  skinned.updateMatrixWorld(true);
+  const bindMatrix = new THREE.Matrix4().copy(skinned.matrixWorld).invert();
+  skinned.bind(skinned.skeleton, bindMatrix);
+  skinned.skeleton.update();
+  skinned.frustumCulled = false;
+  skinned.visible = true;
+  const mats = Array.isArray(skinned.material) ? skinned.material : [skinned.material];
+  mats.forEach((mat) => {
+    if (!mat) return;
+    mat.side = THREE.DoubleSide;
+    mat.depthWrite = true;
+    mat.needsUpdate = true;
+  });
+}
 
-  const diorama = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
+function consolidateElephantRig(model) {
+  if (model.userData.elephantRigDone) {
+    const skinned = findElephantSkinnedMesh(model);
+    if (skinned) rebindSkinnedMesh(skinned);
+    return skinned;
+  }
+
   const armature = model.getObjectByName('Object_5.002');
   const skinned = model.getObjectByName('Object_59') || findElephantSkinnedMesh(model);
-  if (!diorama || !armature || !skinned) {
-    console.warn('[AR] Elephant nodes missing', {
-      diorama: !!diorama,
-      armature: !!armature,
-      skinned: !!skinned,
-    });
+  if (!armature || !skinned) {
+    console.warn('[AR] Elephant parts missing', { armature: !!armature, skinned: !!skinned });
     return null;
   }
 
@@ -616,45 +632,33 @@ function placeElephantOnDiorama(model) {
     rig.name = 'elephant-rig';
     model.add(rig);
     rig.attach(armature);
-    rig.attach(skinned);
-    armature.scale.set(1, 1, 1);
-    skinned.scale.set(1, 1, 1);
+    armature.attach(skinned);
   }
 
   model.updateMatrixWorld(true);
-  const dBox = new THREE.Box3().setFromObject(diorama);
-  if (dBox.isEmpty()) return null;
-
-  const center = dBox.getCenter(new THREE.Vector3());
-  const size = dBox.getSize(new THREE.Vector3());
 
   const geoBox = new THREE.Box3().setFromBufferAttribute(skinned.geometry.attributes.position);
-  const geoH = geoBox.getSize(new THREE.Vector3()).y;
-  const targetH = size.y * 0.18;
-  rig.scale.setScalar(targetH / Math.max(geoH, 0.001));
+  const worldBox = geoBox.clone().applyMatrix4(skinned.matrixWorld);
+  const worldH = worldBox.getSize(new THREE.Vector3()).y;
 
-  const worldPos = new THREE.Vector3(
-    center.x,
-    dBox.min.y + size.y * 0.022,
-    center.z + size.z * 0.2,
-  );
-  model.worldToLocal(worldPos);
-  rig.position.copy(worldPos);
-  rig.rotation.set(0, -0.35, 0);
-
-  skinned.frustumCulled = false;
-  skinned.renderOrder = 2;
-  skinned.visible = true;
-
-  if (skinned.skeleton) {
-    skinned.skeleton.pose();
-    skinned.skeleton.update();
+  const diorama = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
+  let targetH = 0.2;
+  if (diorama) {
+    const dSize = new THREE.Box3().setFromObject(diorama).getSize(new THREE.Vector3());
+    targetH = Math.max(dSize.y * 0.14, 0.12);
   }
 
-  model.updateMatrixWorld(true);
-  model.userData.elephantPlaced = true;
-  console.info('[AR] Elephant rig placed at', rig.position.toArray().map((v) => v.toFixed(3)));
-  return rig;
+  if (worldH < targetH * 0.6) {
+    const boost = Math.min(targetH / Math.max(worldH, 1e-6), 800);
+    rig.scale.multiplyScalar(boost);
+    model.updateMatrixWorld(true);
+    console.info('[AR] Elephant boost x' + boost.toFixed(1), 'worldH', worldH.toFixed(5));
+  }
+
+  rebindSkinnedMesh(skinned);
+  ensureElephantVisible(model);
+  model.userData.elephantRigDone = true;
+  return skinned;
 }
 
 function pickElephantWalkClip(clips, preferredClip = 'walk') {
@@ -726,15 +730,6 @@ function ensureElephantVisible(model) {
   return skinned;
 }
 
-function initElephantBindPose(model) {
-  const skinned = findElephantSkinnedMesh(model);
-  if (!skinned?.skeleton) return null;
-  skinned.skeleton.pose();
-  skinned.skeleton.update();
-  model.updateMatrixWorld(true);
-  return skinned;
-}
-
 function createElephantRootPin(skinned) {
   if (!skinned?.skeleton) return () => {};
   const pinned = [];
@@ -774,7 +769,7 @@ function filterWalkClipSafe(clip) {
 }
 
 function setupElephantWalk(model, clips, preferredClip = 'walk') {
-  const skinned = ensureElephantVisible(model);
+  const skinned = consolidateElephantRig(model);
   if (!skinned) return null;
 
   const armature = model.getObjectByName('Object_5.002');
@@ -1205,7 +1200,7 @@ async function initAR() {
         if (on && child.isSkinnedMesh) child.frustumCulled = false;
       });
       if (on) {
-        ensureElephantVisible(model);
+        consolidateElephantRig(model);
         item.anim?.reset?.() || item.anim?.play();
       } else {
         item.anim?.pause();
@@ -1268,7 +1263,7 @@ async function initAR() {
     }
 
     showExperience(expId);
-    ensureElephantVisible(entry.holder.children[0]);
+    consolidateElephantRig(entry.holder.children[0]);
     entry.holder.visible = true;
     entry.holder.traverse((child) => {
       child.visible = true;
