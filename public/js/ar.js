@@ -483,7 +483,7 @@ async function buildExperience(exp, slot, onProgress) {
   const model = asset.scene;
   sanitizeScene(model);
   removeSkinnedRig(model, exp);
-  resetSkeletonBindPose(model);
+  if (!exp.preserveSkinnedMeshes) resetSkeletonBindPose(model);
   ensureDioramaPartsVisible(model);
   stabilizeTowerPivot(model);
   let logoMesh = detachLogoForFitting(model, exp);
@@ -512,6 +512,12 @@ async function buildExperience(exp, slot, onProgress) {
       exp.animationExclude ?? [],
       exp.preferredAnimation ?? '',
     );
+
+  if (anim && exp.preserveSkinnedMeshes) {
+    model.traverse((child) => {
+      if (child.isSkinnedMesh) child.updateMatrixWorld(true);
+    });
+  }
 
   return { holder, anim };
 }
@@ -571,6 +577,9 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
     case 'facade':
       model.position.y += size.y * (fitLift ?? 0.40);
       break;
+    case 'diorama':
+      model.position.y += size.y * 0.12;
+      break;
     case 'center':
     default:
       break;
@@ -579,6 +588,8 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   let scaleBase;
   if (fitMode === 'facade' || fitMode === 'center') {
     scaleBase = Math.max(size.x, size.y * (fitHeightFactor ?? 0.88));
+  } else if (fitMode === 'diorama') {
+    scaleBase = Math.max(size.x, size.y * 0.92);
   } else {
     scaleBase = Math.max(size.x, size.y, size.z);
   }
@@ -870,6 +881,7 @@ async function initAR() {
   let orientationBusy = false;
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
+  let appearFrames = 0;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1135,6 +1147,7 @@ async function initAR() {
     }
 
     activeSlot = slot;
+    appearFrames = 0;
     const mounted = await mountToSlot(slot, slot.experience.id);
     if (mounted) show('ar-controls');
   };
@@ -1154,6 +1167,7 @@ async function initAR() {
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
       found.add(slot);
+      appearFrames = 0;
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
@@ -1236,6 +1250,19 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
+        if (activeSlot && activeRegistry?.holder?.visible) {
+          if (appearFrames < AR_SETTINGS.scaleCalibrateFrames) {
+            appearFrames += 1;
+            const t = appearFrames / AR_SETTINGS.scaleCalibrateFrames;
+            const ease = t * t * (3 - 2 * t);
+            activeSlot.attachRig.scale.setScalar(
+              THREE.MathUtils.lerp(0.78, zoom.getZoom(), ease),
+            );
+            activeSlot.attachRig.position.y = position.getYOffset() * ease;
+          } else {
+            applyUserTransform(activeSlot);
+          }
+        }
         if (activeRegistry?.anim && activeRegistry.holder.visible) {
           activeRegistry.anim.update(delta);
         }
