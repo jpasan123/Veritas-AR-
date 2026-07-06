@@ -501,6 +501,8 @@ async function buildExperience(exp, slot, onProgress) {
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
+  attachElephantToDiorama(model);
+  boostElephantToVisibleSize(model);
   initElephantBindPose(model);
   ensureElephantVisible(model);
 
@@ -593,6 +595,49 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
     scaleBase = Math.max(size.x, size.y, size.z);
   }
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
+}
+
+function attachElephantToDiorama(model) {
+  const diorama = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
+  const armature = model.getObjectByName('Object_5.002');
+  if (!diorama || !armature || armature.parent === diorama) return;
+  diorama.attach(armature);
+  console.info('[AR] Elephant attached to diorama');
+}
+
+function boostElephantToVisibleSize(model) {
+  const armature = model.getObjectByName('Object_5.002');
+  const skinned = findElephantSkinnedMesh(model);
+  if (!armature || !skinned) {
+    console.warn('[AR] Elephant armature missing — cannot boost scale');
+    return;
+  }
+
+  if (armature.userData.elephantBoosted) return;
+
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  if (skinned.geometry?.attributes?.position) {
+    box.setFromBufferAttribute(skinned.geometry.attributes.position);
+    box.applyMatrix4(skinned.matrixWorld);
+  } else {
+    box.setFromObject(skinned);
+  }
+
+  const size = box.getSize(new THREE.Vector3());
+  const targetHeight = 0.38;
+
+  if (size.y < targetHeight * 0.5) {
+    const factor = size.y > 0.0001
+      ? Math.min(targetHeight / size.y, 400)
+      : 250;
+    armature.scale.multiplyScalar(factor);
+    skinned.scale.set(1, 1, 1);
+    model.updateMatrixWorld(true);
+    console.info('[AR] Elephant scale boosted x' + factor.toFixed(1), 'height', size.y.toFixed(5));
+  }
+
+  armature.userData.elephantBoosted = true;
 }
 
 function pickElephantWalkClip(clips, preferredClip = 'walk') {
