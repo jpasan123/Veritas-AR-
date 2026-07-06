@@ -508,6 +508,7 @@ async function buildExperience(exp, slot, onProgress) {
   let anim = null;
   if (exp.preferredAnimation && exp.preserveSkinnedMeshes) {
     anim = setupElephantWalk(model, asset.animations, exp.preferredAnimation);
+    anchorElephantToGround(model);
   } else if (exp.playAnimation !== false) {
     anim = setupAnimations(
       model,
@@ -616,7 +617,17 @@ function anchorElephantToGround(model) {
 
   model.updateMatrixWorld(true);
 
-  const groundBox = new THREE.Box3().setFromObject(tripo);
+  const tripoBox = new THREE.Box3();
+  tripo.traverse((child) => {
+    if (!child.isMesh || child.isSkinnedMesh) return;
+    tripoBox.union(new THREE.Box3().setFromObject(child));
+  });
+  if (tripoBox.isEmpty()) tripoBox.setFromObject(tripo);
+  const tripoSize = tripoBox.getSize(new THREE.Vector3());
+  const roadY = tripoBox.min.y + tripoSize.y * 0.10;
+  const roadX = (tripoBox.min.x + tripoBox.max.x) * 0.5;
+  const roadZ = tripoBox.min.z + tripoSize.z * 0.76;
+
   const elephantBox = new THREE.Box3();
   if (skinned?.geometry?.attributes?.position) {
     elephantBox.setFromBufferAttribute(skinned.geometry.attributes.position);
@@ -625,16 +636,23 @@ function anchorElephantToGround(model) {
     elephantBox.setFromObject(armature);
   }
 
-  if (groundBox.isEmpty() || elephantBox.isEmpty()) return;
+  if (tripoBox.isEmpty() || elephantBox.isEmpty()) return;
 
-  const dy = groundBox.min.y - elephantBox.min.y + 0.015;
-  if (Math.abs(dy) > 0.001) {
+  const eleCenter = elephantBox.getCenter(new THREE.Vector3());
+  const feetY = elephantBox.min.y;
+  const dx = roadX - eleCenter.x;
+  const dy = roadY - feetY;
+  const dz = roadZ - eleCenter.z;
+
+  if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001 || Math.abs(dz) > 0.001) {
     const wp = armature.getWorldPosition(new THREE.Vector3());
+    wp.x += dx;
     wp.y += dy;
+    wp.z += dz;
     tripo.worldToLocal(wp);
     armature.position.copy(wp);
     model.updateMatrixWorld(true);
-    console.info('[AR] Elephant grounded, dy', dy.toFixed(4));
+    console.info('[AR] Elephant on road', { dx: dx.toFixed(3), dy: dy.toFixed(3), dz: dz.toFixed(3) });
   }
 }
 
@@ -716,6 +734,18 @@ function ensureElephantVisible(model) {
   return skinned;
 }
 
+function createElephantArmaturePin(armature) {
+  if (!armature) return () => {};
+  const pos = armature.position.clone();
+  const quat = armature.quaternion.clone();
+  const scale = armature.scale.clone();
+  return () => {
+    armature.position.copy(pos);
+    armature.quaternion.copy(quat);
+    armature.scale.copy(scale);
+  };
+}
+
 function createElephantRootPin(skinned) {
   if (!skinned?.skeleton) return () => {};
   const pinned = [];
@@ -767,6 +797,7 @@ function setupElephantWalk(model, clips, preferredClip = 'walk') {
 
   const walkClip = filterWalkClipSafe(clip);
   const pinRoot = createElephantRootPin(skinned);
+  const pinArmature = createElephantArmaturePin(armature);
   const mixer = new THREE.AnimationMixer(armature || model);
   const action = mixer.clipAction(walkClip);
   action.setLoop(THREE.LoopRepeat);
@@ -780,10 +811,12 @@ function setupElephantWalk(model, clips, preferredClip = 'walk') {
       action.paused = false;
       action.play();
       pinRoot();
+      pinArmature();
     },
     update(delta) {
       mixer.update(delta);
       pinRoot();
+      pinArmature();
       skinned.skeleton?.update();
     },
     play() {
@@ -1112,8 +1145,17 @@ async function initAR() {
 
   const applyUserTransform = (slot) => {
     if (!slot) return;
-    slot.attachRig.position.set(0, position.getYOffset(), 0);
-    slot.attachRig.scale.setScalar(zoom.getZoom());
+    const z = zoom.getZoom();
+    const yOff = position.getYOffset();
+    const off = getMarkerOffset(slot.experience);
+    slot.marker.position.set(off.x, off.y + yOff, off.z);
+    slot.attachRig.position.set(0, 0, 0);
+    slot.attachRig.scale.set(1, 1, 1);
+    const holder = slot.attachRig.children[0];
+    if (holder) {
+      holder.position.set(0, 0, 0);
+      holder.scale.setScalar(z);
+    }
   };
 
   const resetSlotSmoothing = (slot) => {

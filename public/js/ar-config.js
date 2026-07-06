@@ -42,7 +42,7 @@ export const AR_SETTINGS = {
   defaultUserZoom: 1,
   minUserZoom: 0.55,
   maxUserZoom: 1.8,
-  zoomStep: 0.15,
+  zoomStep: 0.08,
   defaultUserYOffset: 0.02,
   minUserYOffset: -0.2,
   maxUserYOffset: 0.35,
