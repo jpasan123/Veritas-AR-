@@ -500,7 +500,7 @@ async function buildExperience(exp, slot, onProgress) {
   ensureDioramaPartsVisible(model);
   stabilizeTowerPivot(model);
   let logoMesh = detachLogoForFitting(model, exp);
-  preNormalizeModel(model);
+  if (!exp.glbBounds) preNormalizeModel(model);
   prepareModel(model);
   logoMesh = optimizeModelForDevice(model, logoMesh, exp);
   fitModel(
@@ -511,6 +511,7 @@ async function buildExperience(exp, slot, onProgress) {
     exp.fitBounds,
     exp.fitHeightFactor,
     logoMesh !== null,
+    exp.glbBounds,
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
@@ -579,7 +580,28 @@ function getFitBox(model, fitBounds, excludeLogoMesh = false) {
   return found ? box : new THREE.Box3().setFromObject(model);
 }
 
-function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor, excludeLogoMesh = false) {
+function fitModelBaked(model, glbBounds, bannerWidth, fitMode = 'center') {
+  const { width, height, centerX, centerY, centerZ, minY } = glbBounds;
+  model.position.set(-centerX, -centerY, -centerZ);
+  if (fitMode === 'ground') {
+    model.position.y = -minY;
+  }
+  const scale = bannerWidth / Math.max(width, 0.0001);
+  model.scale.setScalar(scale);
+  console.info('[AR] fitModelBaked', {
+    bannerWidth,
+    scale: scale.toFixed(4),
+    fitMode,
+    worldH: (height * scale).toFixed(3),
+  });
+}
+
+function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor, excludeLogoMesh = false, glbBounds = null) {
+  if (glbBounds?.width) {
+    fitModelBaked(model, glbBounds, modelScale, fitMode);
+    return;
+  }
+
   const box = getFitBox(model, fitBounds, excludeLogoMesh);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
@@ -1207,6 +1229,7 @@ async function initAR() {
   let lockedTargetIndex = null;
   let lockedSlot = null;
   let smoothFrameCount = 0;
+  let sessionTargetLocked = false;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1396,7 +1419,10 @@ async function initAR() {
       child.visible = true;
       if (child.isSkinnedMesh) child.frustumCulled = false;
     });
-    entry.anim?.reset?.();
+    if (!entry.mountedOnce) {
+      entry.mountedOnce = true;
+      entry.anim?.reset?.();
+    }
     applyUserTransform(slot);
     setLoadStatus('');
     return true;
@@ -1411,7 +1437,7 @@ async function initAR() {
         child.visible = true;
         if (child.isSkinnedMesh) child.frustumCulled = false;
       });
-      activeRegistry.anim?.reset?.();
+      activeRegistry.anim?.play?.();
     }
   };
 
@@ -1589,8 +1615,13 @@ async function initAR() {
   };
 
   const pickActive = () => {
-    if (lockedSlot && found.has(lockedSlot)) {
-      void setActive(lockedSlot);
+    const keepSessionLock = AR_SETTINGS.sessionLockTarget !== false;
+
+    if (lockedSlot) {
+      if (found.has(lockedSlot)) {
+        if (activeSlot !== lockedSlot) void setActive(lockedSlot);
+        else void ensureActiveVisible();
+      }
       return;
     }
 
@@ -1599,15 +1630,18 @@ async function initAR() {
       if (!slot) continue;
       lockedSlot = slot;
       lockedTargetIndex = idx;
-      smoothFrameCount = 0;
+      if (!sessionTargetLocked) smoothFrameCount = 0;
+      sessionTargetLocked = keepSessionLock;
       void setActive(slot);
       return;
     }
 
-    lockedSlot = null;
-    lockedTargetIndex = null;
-    smoothFrameCount = 0;
-    void setActive(null);
+    if (!keepSessionLock) {
+      lockedSlot = null;
+      lockedTargetIndex = null;
+      smoothFrameCount = 0;
+      void setActive(null);
+    }
   };
 
   slots.forEach((slot) => {
@@ -1624,27 +1658,24 @@ async function initAR() {
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
-      pickActive();
-      void ensureActiveVisible();
+      if (sessionTargetLocked && lockedSlot === slot) {
+        void ensureActiveVisible();
+      } else {
+        pickActive();
+      }
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
       scheduleSmoothingReset(slot);
       const stillTracked = slots.some((s) => s.experience?.id === slot.experience?.id && found.has(s));
-      if (slot === lockedSlot && !stillTracked) {
-        lockedSlot = null;
-        lockedTargetIndex = null;
-        smoothFrameCount = 0;
-      }
       if (activeSlot === slot && !stillTracked) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
-          if (!isSlotTracked(activeSlot)) pickActive();
+          if (!isSlotTracked(activeSlot)) {
+            hideAllHolders();
+            hide('ar-controls');
+          }
         }, AR_SETTINGS.targetLostDelayMs);
-      } else if (stillTracked && activeSlot && found.has(activeSlot)) {
-        return;
-      } else if (stillTracked) {
-        pickActive();
       }
     };
   });
