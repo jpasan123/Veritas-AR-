@@ -236,7 +236,29 @@ function mountLogoOnTower(model, logo, exp) {
   console.info('[AR] Logo mounted at tower top');
 }
 
-function removeSkinnedRig(model) {
+function resetSkeletonBindPose(model) {
+  model.traverse((child) => {
+    if (!child.isSkinnedMesh || !child.skeleton) return;
+    child.skeleton.pose();
+    child.frustumCulled = false;
+    child.visible = true;
+  });
+  model.updateMatrixWorld(true);
+}
+
+function ensureDioramaPartsVisible(model) {
+  model.traverse((child) => {
+    if (!child.isMesh) return;
+    const name = (child.name || '').toLowerCase();
+    if (name.includes('elephant') || name.includes('mob') || child.isSkinnedMesh) {
+      child.visible = true;
+      child.frustumCulled = false;
+    }
+  });
+}
+
+function removeSkinnedRig(model, exp) {
+  if (exp?.preserveSkinnedMeshes) return;
   const remove = [];
   model.traverse((child) => {
     const name = (child.name || '').toLowerCase();
@@ -460,7 +482,9 @@ async function buildExperience(exp, slot, onProgress) {
 
   const model = asset.scene;
   sanitizeScene(model);
-  removeSkinnedRig(model);
+  removeSkinnedRig(model, exp);
+  resetSkeletonBindPose(model);
+  ensureDioramaPartsVisible(model);
   stabilizeTowerPivot(model);
   let logoMesh = detachLogoForFitting(model, exp);
   preNormalizeModel(model);
@@ -519,7 +543,7 @@ function getFitBox(model, fitBounds, excludeLogoMesh = false) {
     if (meshBox.isEmpty()) return;
 
     const meshCenter = meshBox.getCenter(new THREE.Vector3());
-    if (meshCenter.y < -1.0) return;
+    if (fitBounds !== 'diorama' && meshCenter.y < -1.0) return;
 
     box.union(meshBox);
     found = true;
@@ -788,7 +812,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = Math.min(slotCount, 2);
+  const maxTrack = 1;
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
