@@ -501,6 +501,7 @@ async function buildExperience(exp, slot, onProgress) {
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
+  secureElephantRig(model);
 
   if (slot) slot.attachRig.add(holder);
 
@@ -593,32 +594,105 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
 }
 
-function setupElephantWalk(model, clips, preferredClip = 'walk') {
+function findElephantSkinnedMesh(model) {
+  let best = null;
+  let fallback = null;
+  model.traverse((child) => {
+    if (!child.isSkinnedMesh) return;
+    fallback = child;
+    if (/elephant|mob/i.test(child.name || '')) best = child;
+  });
+  return best || fallback;
+}
+
+function secureElephantRig(model) {
+  const skinned = findElephantSkinnedMesh(model);
+  if (!skinned) {
+    console.warn('[AR] Elephant skinned mesh not found');
+    return null;
+  }
+
+  skinned.visible = true;
+  skinned.frustumCulled = false;
+  skinned.matrixAutoUpdate = true;
+
+  const skeleton = skinned.skeleton;
+  if (skeleton) {
+    skeleton.bones.forEach((bone) => {
+      bone.visible = true;
+      bone.matrixAutoUpdate = true;
+    });
+    skeleton.pose();
+    skeleton.update();
+  }
+
+  model.traverse((child) => {
+    if (!child.isBone) return;
+    const n = (child.name || '').toLowerCase();
+    if (n.includes('bip') || n.includes('bn_') || n.includes('armature') || n.includes('rootjoint')) {
+      child.visible = true;
+      child.matrixAutoUpdate = true;
+    }
+  });
+
+  model.updateMatrixWorld(true);
+  console.info('[AR] Elephant rig secured:', skinned.name);
+  return skinned;
+}
+
+function pickElephantWalkClip(clips, preferredClip = 'walk') {
   if (!clips?.length) return null;
-  const clip = clips.find((c) => c.name.toLowerCase().includes(preferredClip.toLowerCase()));
+  const preferred = clips.find((c) => c.name.toLowerCase().includes(preferredClip.toLowerCase()));
+  if (preferred) return preferred;
+  return clips.find((c) => /walk/i.test(c.name))
+    || clips.find((c) => /run/i.test(c.name))
+    || clips.find((c) => /idle/i.test(c.name))
+    || clips[0];
+}
+
+function filterClipToElephantBones(clip, skinned) {
+  const boneNames = new Set((skinned.skeleton?.bones || []).map((b) => b.name));
+  const tracks = clip.tracks.filter((track) => {
+    const node = track.name.split('.')[0].split('/').pop();
+    if (boneNames.has(node)) return true;
+    return /object_5|armature|bip|bn_/i.test(track.name);
+  });
+  if (!tracks.length) return clip;
+  return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+}
+
+function setupElephantWalk(model, clips, preferredClip = 'walk') {
+  const skinned = secureElephantRig(model);
+  if (!skinned) return null;
+
+  const clip = pickElephantWalkClip(clips, preferredClip);
   if (!clip) {
     console.warn('[AR] Walk clip not found');
     return null;
   }
 
-  let skinned = null;
-  model.traverse((child) => {
-    if (child.isSkinnedMesh && /elephant|mob/i.test(child.name || '')) skinned = child;
-  });
-  if (!skinned) {
-    console.warn('[AR] Elephant mesh not found');
-    return null;
-  }
-
-  const mixer = new THREE.AnimationMixer(skinned);
-  const action = mixer.clipAction(clip);
+  const walkClip = filterClipToElephantBones(clip, skinned);
+  const mixer = new THREE.AnimationMixer(model);
+  const action = mixer.clipAction(walkClip);
   action.setLoop(THREE.LoopRepeat);
+  action.setEffectiveTimeScale(1);
+  action.setEffectiveWeight(1);
   action.play();
-  console.info('[AR] Elephant walk started');
+  console.info('[AR] Elephant walk active:', walkClip.name, `(${walkClip.tracks.length} tracks)`);
+
   return {
-    update(delta) { mixer.update(delta); },
-    play() { action.paused = false; action.play(); },
-    pause() { action.paused = true; },
+    skinned,
+    update(delta) {
+      mixer.update(delta);
+      skinned.skeleton?.update();
+    },
+    play() {
+      action.paused = false;
+      action.play();
+    },
+    pause() {
+      action.paused = true;
+    },
   };
 }
 
@@ -907,6 +981,7 @@ async function initAR() {
   let orientationBusy = false;
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
+  let lockedTargetIndex = null;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -934,9 +1009,16 @@ async function initAR() {
     expRegistry.forEach((item) => {
       const on = item === entry;
       item.holder.visible = on;
-      item.holder.traverse((child) => { child.visible = on; });
-      if (on) item.anim?.play();
-      else item.anim?.pause();
+      item.holder.traverse((child) => {
+        child.visible = on;
+        if (on && child.isSkinnedMesh) child.frustumCulled = false;
+      });
+      if (on) {
+        secureElephantRig(item.holder.children[0]);
+        item.anim?.play();
+      } else {
+        item.anim?.pause();
+      }
     });
     activeRegistry = entry;
     return true;
@@ -1177,9 +1259,19 @@ async function initAR() {
   };
 
   const pickActive = () => {
+    if (lockedTargetIndex !== null) {
+      const locked = slots.find((s) => s.targetIndex === lockedTargetIndex && found.has(s));
+      if (locked) {
+        void setActive(locked);
+        return;
+      }
+      lockedTargetIndex = null;
+    }
+
     for (const idx of TARGET_PRIORITY) {
       const slot = slots.find((s) => s.targetIndex === idx && found.has(s));
       if (slot) {
+        lockedTargetIndex = idx;
         void setActive(slot);
         return;
       }
@@ -1198,6 +1290,7 @@ async function initAR() {
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
+      if (lockedTargetIndex === slot.targetIndex) lockedTargetIndex = null;
       if (activeSlot === slot) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
@@ -1274,7 +1367,7 @@ async function initAR() {
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
         if (activeSlot) applyUserTransform(activeSlot);
-        if (activeRegistry?.anim && activeRegistry.holder.visible) {
+        if (activeRegistry?.anim && activeSlot && found.has(activeSlot)) {
           activeRegistry.anim.update(delta);
         }
         renderer.render(scene, camera);
