@@ -508,7 +508,6 @@ async function buildExperience(exp, slot, onProgress) {
     logoMesh !== null,
   );
   mountLogoOnTower(model, logoMesh, exp);
-  anchorElephantToGround(model);
   holder.add(model);
 
   if (slot) slot.attachRig.add(holder);
@@ -516,7 +515,6 @@ async function buildExperience(exp, slot, onProgress) {
   let anim = null;
   if (exp.preferredAnimation && exp.preserveSkinnedMeshes) {
     anim = setupElephantWalk(model, asset.animations, exp.preferredAnimation);
-    anchorElephantToGround(model);
   } else if (exp.playAnimation !== false) {
     anim = setupAnimations(
       model,
@@ -525,6 +523,9 @@ async function buildExperience(exp, slot, onProgress) {
       exp.preferredAnimation ?? '',
     );
   }
+
+  anchorElephantToGround(model);
+  anim?.refreshArmaturePin?.();
 
   return { holder, anim };
 }
@@ -743,14 +744,25 @@ function ensureElephantVisible(model) {
 }
 
 function createElephantArmaturePin(armature) {
-  if (!armature) return () => {};
-  const pos = armature.position.clone();
-  const quat = armature.quaternion.clone();
-  const scale = armature.scale.clone();
-  return () => {
-    armature.position.copy(pos);
-    armature.quaternion.copy(quat);
-    armature.scale.copy(scale);
+  if (!armature) {
+    return { apply() {}, refresh() {} };
+  }
+  const state = {
+    pos: armature.position.clone(),
+    quat: armature.quaternion.clone(),
+    scale: armature.scale.clone(),
+  };
+  return {
+    refresh() {
+      state.pos.copy(armature.position);
+      state.quat.copy(armature.quaternion);
+      state.scale.copy(armature.scale);
+    },
+    apply() {
+      armature.position.copy(state.pos);
+      armature.quaternion.copy(state.quat);
+      armature.scale.copy(state.scale);
+    },
   };
 }
 
@@ -814,17 +826,20 @@ function setupElephantWalk(model, clips, preferredClip = 'walk') {
 
   return {
     skinned,
+    refreshArmaturePin() {
+      pinArmature.refresh();
+    },
     reset() {
       action.reset();
       action.paused = false;
       action.play();
       pinRoot();
-      pinArmature();
+      pinArmature.apply();
     },
     update(delta) {
       mixer.update(delta);
       pinRoot();
-      pinArmature();
+      pinArmature.apply();
       skinned.skeleton?.update();
     },
     play() {
