@@ -114,6 +114,11 @@ function sanitizeScene(scene) {
   remove.forEach((node) => node.parent?.remove(node));
 }
 
+function findDioramaRoot(model) {
+  if ((model.name || '').startsWith('tripo_node')) return model;
+  return model.children?.find((c) => (c.name || '').startsWith('tripo_node')) ?? null;
+}
+
 function findLogoMesh(model) {
   let logo = null;
   model.traverse((child) => {
@@ -534,7 +539,7 @@ function getFitBox(model, fitBounds, excludeLogoMesh = false) {
   model.updateMatrixWorld(true);
 
   if (fitBounds === 'diorama') {
-    const tripo = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
+    const tripo = findDioramaRoot(model);
     if (tripo) {
       const box = new THREE.Box3().setFromObject(tripo);
       if (!box.isEmpty()) return box;
@@ -580,7 +585,8 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   const center = box.getCenter(new THREE.Vector3());
 
   if (size.length() < 0.0001) {
-    model.scale.setScalar(modelScale);
+    console.warn('[AR] fitModel: empty bounds, using fallback scale');
+    model.scale.setScalar(modelScale * 0.15);
     return;
   }
 
@@ -601,15 +607,26 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
       break;
   }
 
+  // modelScale = target width as a fraction of the MindAR banner (1 unit wide).
   let scaleBase;
-  if (fitMode === 'facade' || fitMode === 'center') {
+  if (fitBounds === 'diorama' && fitMode === 'ground') {
+    scaleBase = size.x;
+  } else if (fitMode === 'facade' || fitMode === 'center') {
     scaleBase = Math.max(size.x, size.y * (fitHeightFactor ?? 0.88));
   } else if (fitMode === 'diorama') {
     scaleBase = Math.max(size.x, size.y * 0.92);
   } else {
     scaleBase = Math.max(size.x, size.y, size.z);
   }
-  model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
+
+  const scale = modelScale / Math.max(scaleBase, 0.0001);
+  model.scale.setScalar(scale);
+  console.info('[AR] fitModel', {
+    bannerWidth: modelScale,
+    bounds: `${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)}`,
+    scale: scale.toFixed(4),
+    worldWidth: (size.x * scale).toFixed(3),
+  });
 }
 
 function getElephantFootY(skinned, armature) {
@@ -636,7 +653,7 @@ function getElephantFootY(skinned, armature) {
 }
 
 function anchorElephantToGround(model) {
-  const tripo = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
+  const tripo = findDioramaRoot(model);
   const armature = model.getObjectByName('Object_5.002');
   const skinned = model.getObjectByName('Object_59') || findElephantSkinnedMesh(model);
   if (!tripo || !armature) return;
@@ -1603,7 +1620,7 @@ async function initAR() {
       const siblingsTracked = slots.some(
         (s) => s !== slot && s.experience?.id === slot.experience?.id && found.has(s),
       );
-      if (!wasFound && !siblingsTracked) resetSlotSmoothing(slot);
+      if (!wasFound && !siblingsTracked && !slot.smoothReady) resetSlotSmoothing(slot);
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
