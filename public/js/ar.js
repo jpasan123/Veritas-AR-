@@ -109,9 +109,14 @@ function sanitizeScene(scene) {
 function findLogoMesh(model) {
   let logo = null;
   model.traverse((child) => {
+    if (!child.isMesh) return;
     if ((child.name || '').startsWith('tripo_node')) logo = child;
   });
   return logo;
+}
+
+function shouldDetachLogo(exp) {
+  return !!(exp?.logoRotation || exp?.logoFlipX || exp?.logoOffset);
 }
 
 function getTowerBounds(model) {
@@ -231,7 +236,24 @@ function mountLogoOnTower(model, logo, exp) {
   console.info('[AR] Logo mounted at tower top');
 }
 
-function detachLogoForFitting(model) {
+function removeSkinnedRig(model) {
+  const remove = [];
+  model.traverse((child) => {
+    const name = (child.name || '').toLowerCase();
+    if (
+      name.includes('bip01')
+      || name.includes('armature')
+      || name.includes('_rootjoint')
+      || name.includes('bn_tail')
+    ) {
+      remove.push(child);
+    }
+  });
+  remove.forEach((node) => node.parent?.remove(node));
+}
+
+function detachLogoForFitting(model, exp) {
+  if (!shouldDetachLogo(exp)) return null;
   const logo = findLogoMesh(model);
   if (!logo) return null;
   logo.parent?.remove(logo);
@@ -332,7 +354,8 @@ function countVertices(root) {
   return count;
 }
 
-function optimizeModelForDevice(model, logoMesh) {
+function optimizeModelForDevice(model, logoMesh, exp) {
+  if (exp?.skipMaterialLite) return logoMesh;
   const verts = countVertices(model);
   if (LOW_END) {
     let logo = logoMesh;
@@ -418,11 +441,12 @@ async function buildExperience(exp, slot, onProgress) {
 
   const model = asset.scene;
   sanitizeScene(model);
+  removeSkinnedRig(model);
   stabilizeTowerPivot(model);
-  let logoMesh = detachLogoForFitting(model);
+  let logoMesh = detachLogoForFitting(model, exp);
   preNormalizeModel(model);
   prepareModel(model);
-  logoMesh = optimizeModelForDevice(model, logoMesh);
+  logoMesh = optimizeModelForDevice(model, logoMesh, exp);
   fitModel(
     model,
     exp.modelScale,
@@ -430,6 +454,7 @@ async function buildExperience(exp, slot, onProgress) {
     exp.fitLift,
     exp.fitBounds,
     exp.fitHeightFactor,
+    logoMesh !== null,
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
@@ -448,7 +473,7 @@ async function buildExperience(exp, slot, onProgress) {
   return { holder, anim };
 }
 
-function getFitBox(model, fitBounds) {
+function getFitBox(model, fitBounds, excludeLogoMesh = false) {
   model.updateMatrixWorld(true);
 
   if (fitBounds !== 'mesh') {
@@ -456,7 +481,7 @@ function getFitBox(model, fitBounds) {
     model.traverse((child) => {
       if (!child.isMesh) return;
       const name = (child.name || '').toLowerCase();
-      if (name.startsWith('tripo_node')) return;
+      if (excludeLogoMesh && name.startsWith('tripo_node')) return;
       box.union(new THREE.Box3().setFromObject(child));
     });
     return box.isEmpty() ? new THREE.Box3().setFromObject(model) : box;
@@ -469,7 +494,7 @@ function getFitBox(model, fitBounds) {
 
     const name = (child.name || '').toLowerCase();
     if (name.includes('camera') || name.includes('light')) return;
-    if (name.startsWith('tripo_node')) return;
+    if (excludeLogoMesh && name.startsWith('tripo_node')) return;
 
     const meshBox = new THREE.Box3().setFromObject(child);
     if (meshBox.isEmpty()) return;
@@ -484,8 +509,8 @@ function getFitBox(model, fitBounds) {
   return found ? box : new THREE.Box3().setFromObject(model);
 }
 
-function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor) {
-  const box = getFitBox(model, fitBounds);
+function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor, excludeLogoMesh = false) {
+  const box = getFitBox(model, fitBounds, excludeLogoMesh);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
 
