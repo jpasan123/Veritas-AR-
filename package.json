@@ -5,6 +5,7 @@
   "description": "Veritas Poson AR - Image tracking web experience",
   "scripts": {
     "compile-target": "node scripts/compile-browser.js",
+    "build:mobile-glb": "node scripts/build-veritas-ready-mobile.mjs",
     "serve": "npx serve public -l 3000",
     "build": "echo 'Static site — no build step'",
     "deploy:vps": "./scripts/deploy.sh"

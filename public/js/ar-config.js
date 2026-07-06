@@ -6,6 +6,7 @@ const LOCATIONS = {
     id: 'veritas-ar',
     targetIndices: [0, 1],
     modelSrc: 'assets/veritas-ar-ready.glb',
+    modelSrcMobile: 'assets/veritas-ar-ready-mobile.glb',
     modelScale: 0.88,
     modelOffset: { x: 0, y: 0.02, z: 0 },
     fitMode: 'ground',

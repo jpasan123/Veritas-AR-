@@ -8,6 +8,15 @@ const setup = getSetup();
 const EXPERIENCES = setup.experiences;
 const TARGET_PRIORITY = setup.targetPriority;
 const IS_ANDROID = /android/i.test(navigator.userAgent);
+const IS_IOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const IS_PHONE = IS_ANDROID || IS_IOS
+  || (navigator.maxTouchPoints > 1 && Math.min(window.innerWidth, window.innerHeight) < 900);
+
+function resolveModelSrc(exp) {
+  if (!exp) return '';
+  if (exp.modelSrcMobile && (IS_PHONE || LOW_END)) return exp.modelSrcMobile;
+  return exp.modelSrc;
+}
 
 function isLowEndDevice() {
   if (!IS_ANDROID) return false;
@@ -67,16 +76,15 @@ function setLoadStatus(message) {
 }
 
 function prefetchModels(experiences) {
-  if (LOW_END) return;
   experiences.forEach((exp) => {
-    [exp.modelSrc].filter(Boolean).forEach((href) => {
-      const link = document.createElement('link');
-      link.rel = 'prefetch';
-      link.as = 'fetch';
-      link.href = href;
-      link.crossOrigin = 'anonymous';
-      document.head.appendChild(link);
-    });
+    const src = resolveModelSrc(exp);
+    if (!src) return;
+    const link = document.createElement('link');
+    link.rel = IS_PHONE ? 'preload' : 'prefetch';
+    link.as = 'fetch';
+    link.href = src;
+    link.crossOrigin = 'anonymous';
+    document.head.appendChild(link);
   });
 }
 
@@ -471,7 +479,7 @@ async function loadModelAsset(src, onProgress) {
 }
 
 async function loadModelForExperience(exp, onProgress) {
-  return loadModelAsset(exp.modelSrc, onProgress);
+  return loadModelAsset(resolveModelSrc(exp), onProgress);
 }
 
 async function buildExperience(exp, slot, onProgress) {
@@ -1024,7 +1032,7 @@ async function loadExperiences(slots, onProgress) {
         onProgress?.(exp.id, pct);
       });
       registry.set(exp.id, entry);
-      console.info('[AR] Model ready:', exp.id, exp.modelSrc);
+      console.info('[AR] Model ready:', exp.id, resolveModelSrc(exp));
       if (IS_ANDROID) await new Promise((r) => setTimeout(r, 50));
     } catch (err) {
       console.error(`[AR] Failed to load model for ${exp.id}:`, err);
