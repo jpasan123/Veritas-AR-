@@ -501,7 +501,7 @@ async function buildExperience(exp, slot, onProgress) {
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
-  consolidateElephantRig(model);
+  ensureElephantVisible(model);
 
   if (slot) slot.attachRig.add(holder);
 
@@ -594,73 +594,6 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
 }
 
-function rebindSkinnedMesh(skinned) {
-  if (!skinned?.skeleton) return;
-  skinned.skeleton.pose();
-  skinned.updateMatrixWorld(true);
-  const bindMatrix = new THREE.Matrix4().copy(skinned.matrixWorld).invert();
-  skinned.bind(skinned.skeleton, bindMatrix);
-  skinned.skeleton.update();
-  skinned.frustumCulled = false;
-  skinned.visible = true;
-  const mats = Array.isArray(skinned.material) ? skinned.material : [skinned.material];
-  mats.forEach((mat) => {
-    if (!mat) return;
-    mat.side = THREE.DoubleSide;
-    mat.depthWrite = true;
-    mat.needsUpdate = true;
-  });
-}
-
-function consolidateElephantRig(model) {
-  if (model.userData.elephantRigDone) {
-    const skinned = findElephantSkinnedMesh(model);
-    if (skinned) rebindSkinnedMesh(skinned);
-    return skinned;
-  }
-
-  const armature = model.getObjectByName('Object_5.002');
-  const skinned = model.getObjectByName('Object_59') || findElephantSkinnedMesh(model);
-  if (!armature || !skinned) {
-    console.warn('[AR] Elephant parts missing', { armature: !!armature, skinned: !!skinned });
-    return null;
-  }
-
-  let rig = model.getObjectByName('elephant-rig');
-  if (!rig) {
-    rig = new THREE.Group();
-    rig.name = 'elephant-rig';
-    model.add(rig);
-    rig.attach(armature);
-    armature.attach(skinned);
-  }
-
-  model.updateMatrixWorld(true);
-
-  const geoBox = new THREE.Box3().setFromBufferAttribute(skinned.geometry.attributes.position);
-  const worldBox = geoBox.clone().applyMatrix4(skinned.matrixWorld);
-  const worldH = worldBox.getSize(new THREE.Vector3()).y;
-
-  const diorama = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
-  let targetH = 0.2;
-  if (diorama) {
-    const dSize = new THREE.Box3().setFromObject(diorama).getSize(new THREE.Vector3());
-    targetH = Math.max(dSize.y * 0.14, 0.12);
-  }
-
-  if (worldH < targetH * 0.6) {
-    const boost = Math.min(targetH / Math.max(worldH, 1e-6), 800);
-    rig.scale.multiplyScalar(boost);
-    model.updateMatrixWorld(true);
-    console.info('[AR] Elephant boost x' + boost.toFixed(1), 'worldH', worldH.toFixed(5));
-  }
-
-  rebindSkinnedMesh(skinned);
-  ensureElephantVisible(model);
-  model.userData.elephantRigDone = true;
-  return skinned;
-}
-
 function pickElephantWalkClip(clips, preferredClip = 'walk') {
   if (!clips?.length) return null;
   const preferred = clips.find((c) => c.name.toLowerCase().includes(preferredClip.toLowerCase()));
@@ -727,6 +660,15 @@ function ensureElephantVisible(model) {
   });
 
   model.updateMatrixWorld(true);
+
+  const mats = Array.isArray(skinned.material) ? skinned.material : [skinned.material];
+  mats.forEach((mat) => {
+    if (!mat) return;
+    mat.side = THREE.DoubleSide;
+    mat.depthWrite = true;
+    mat.needsUpdate = true;
+  });
+
   return skinned;
 }
 
@@ -769,10 +711,10 @@ function filterWalkClipSafe(clip) {
 }
 
 function setupElephantWalk(model, clips, preferredClip = 'walk') {
-  const skinned = consolidateElephantRig(model);
+  const skinned = ensureElephantVisible(model);
   if (!skinned) return null;
 
-  const armature = model.getObjectByName('Object_5.002');
+  const armature = model.getObjectByName('Object_5.002') || skinned.parent;
   const clip = pickElephantWalkClip(clips, preferredClip);
   if (!clip) {
     console.warn('[AR] Walk clip not found');
@@ -1200,7 +1142,7 @@ async function initAR() {
         if (on && child.isSkinnedMesh) child.frustumCulled = false;
       });
       if (on) {
-        consolidateElephantRig(model);
+        ensureElephantVisible(model);
         item.anim?.reset?.() || item.anim?.play();
       } else {
         item.anim?.pause();
@@ -1263,7 +1205,7 @@ async function initAR() {
     }
 
     showExperience(expId);
-    consolidateElephantRig(entry.holder.children[0]);
+    ensureElephantVisible(entry.holder.children[0]);
     entry.holder.visible = true;
     entry.holder.traverse((child) => {
       child.visible = true;
