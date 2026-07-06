@@ -1104,7 +1104,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = Math.min(slotCount, 6);
+  const maxTrack = Math.min(slotCount, 8);
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {

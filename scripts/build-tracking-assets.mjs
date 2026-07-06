@@ -1,69 +1,80 @@
 /**
- * Build banner tracking crops — logo, sections, contrast boost for MindAR.
+ * Build banner tracking crops from the physical Veritas pull-up banner photo.
  */
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const ASSETS = path.join(ROOT, 'assets');
 const OUT = path.join(ASSETS, 'tracking');
-
-try {
-  await import('sharp');
-} catch {
-  execSync('npm install sharp --no-save', { cwd: ROOT, stdio: 'inherit' });
-}
+const SOURCE = path.join(ASSETS, 'veritas-banner-source.jpeg');
+const BANNER = path.join(ASSETS, 'veritas-banner.jpeg');
 
 const sharp = (await import('sharp')).default;
 
-const bannerPath = path.join(ASSETS, 'veritas-banner.jpeg');
-const logoPath = path.join(ASSETS, 'veritas-logo.png');
-
-if (!fs.existsSync(bannerPath)) {
-  console.error('Missing', bannerPath);
+if (!fs.existsSync(SOURCE)) {
+  console.error('Missing source photo:', SOURCE);
   process.exit(1);
 }
 
 fs.mkdirSync(OUT, { recursive: true });
 
-const banner = sharp(bannerPath);
-const meta = await banner.metadata();
+const sourceMeta = await sharp(SOURCE).metadata();
+const sw = sourceMeta.width;
+const sh = sourceMeta.height;
+
+// Crop the pull-up panel from the physical photo (exclude floor, stand, background).
+const panel = {
+  left: Math.round(sw * 0.03),
+  top: Math.round(sh * 0.012),
+  width: Math.round(sw * 0.94),
+  height: Math.round(sh * 0.84),
+};
+
+await sharp(SOURCE)
+  .extract(panel)
+  .jpeg({ quality: 96, mozjpeg: true })
+  .toFile(BANNER);
+
+const meta = await sharp(BANNER).metadata();
 const w = meta.width;
 const h = meta.height;
+console.log('Banner panel:', w, 'x', h);
 
 const crops = [
   { name: 'banner-full.jpeg', extract: { left: 0, top: 0, width: w, height: h } },
-  { name: 'banner-top.jpeg', extract: { left: 0, top: 0, width: w, height: Math.round(h * 0.42) } },
-  { name: 'banner-headline.jpeg', extract: { left: 0, top: Math.round(h * 0.02), width: w, height: Math.round(h * 0.28) } },
-  { name: 'banner-services.jpeg', extract: { left: 0, top: Math.round(h * 0.30), width: w, height: Math.round(h * 0.28) } },
-  { name: 'banner-middle.jpeg', extract: { left: 0, top: Math.round(h * 0.52), width: w, height: Math.round(h * 0.22) } },
-  { name: 'banner-city.jpeg', extract: { left: Math.round(w * 0.48), top: Math.round(h * 0.52), width: Math.round(w * 0.50), height: Math.round(h * 0.20) } },
-  { name: 'banner-quote.jpeg', extract: { left: 0, top: Math.round(h * 0.72), width: w, height: Math.round(h * 0.14) } },
+  { name: 'banner-top.jpeg', extract: { left: 0, top: 0, width: w, height: Math.round(h * 0.38) } },
+  { name: 'banner-headline.jpeg', extract: { left: 0, top: 0, width: w, height: Math.round(h * 0.24) } },
+  { name: 'banner-logo.jpeg', extract: { left: 0, top: 0, width: Math.round(w * 0.55), height: Math.round(h * 0.12) } },
+  { name: 'banner-wave.jpeg', extract: { left: Math.round(w * 0.42), top: Math.round(h * 0.04), width: Math.round(w * 0.56), height: Math.round(h * 0.30) } },
+  { name: 'banner-services.jpeg', extract: { left: 0, top: Math.round(h * 0.34), width: w, height: Math.round(h * 0.26) } },
+  { name: 'banner-middle.jpeg', extract: { left: 0, top: Math.round(h * 0.56), width: w, height: Math.round(h * 0.20) } },
+  { name: 'banner-qr.jpeg', extract: { left: 0, top: Math.round(h * 0.60), width: Math.round(w * 0.52), height: Math.round(h * 0.14) } },
+  { name: 'banner-city.jpeg', extract: { left: Math.round(w * 0.50), top: Math.round(h * 0.56), width: Math.round(w * 0.48), height: Math.round(h * 0.18) } },
+  { name: 'banner-quote.jpeg', extract: { left: 0, top: Math.round(h * 0.74), width: w, height: Math.round(h * 0.10) } },
+  { name: 'banner-footer.jpeg', extract: { left: 0, top: Math.round(h * 0.82), width: w, height: Math.round(h * 0.18) } },
 ];
 
 for (const crop of crops) {
   const out = path.join(OUT, crop.name);
-  await sharp(bannerPath).extract(crop.extract).jpeg({ quality: 94, mozjpeg: true }).toFile(out);
+  await sharp(BANNER).extract(crop.extract).jpeg({ quality: 95, mozjpeg: true }).toFile(out);
   console.log('OK', crop.name);
 }
 
-await sharp(bannerPath)
-  .modulate({ brightness: 1.04, saturation: 1.12 })
+await sharp(BANNER)
+  .modulate({ brightness: 1.03, saturation: 1.08 })
   .normalize()
-  .sharpen({ sigma: 0.8 })
-  .jpeg({ quality: 94, mozjpeg: true })
+  .sharpen({ sigma: 1.0 })
+  .jpeg({ quality: 95, mozjpeg: true })
   .toFile(path.join(OUT, 'banner-enhanced.jpeg'));
 console.log('OK banner-enhanced.jpeg');
 
-if (fs.existsSync(logoPath)) {
-  await sharp(logoPath)
-    .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
-    .png()
-    .toFile(path.join(OUT, 'logo-512.png'));
-  console.log('OK logo-512.png');
-}
+await sharp(BANNER)
+  .extract({ left: 0, top: 0, width: Math.round(w * 0.50), height: Math.round(h * 0.11) })
+  .png()
+  .toFile(path.join(OUT, 'logo-512.png'));
+console.log('OK logo-512.png');
 
-console.log('Tracking assets ready in', OUT);
+console.log('Physical banner tracking assets ready');
