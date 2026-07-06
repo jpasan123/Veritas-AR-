@@ -501,7 +501,8 @@ async function buildExperience(exp, slot, onProgress) {
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
-  secureElephantRig(model);
+  initElephantBindPose(model);
+  ensureElephantVisible(model);
 
   if (slot) slot.attachRig.add(holder);
 
@@ -594,6 +595,16 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
 }
 
+function pickElephantWalkClip(clips, preferredClip = 'walk') {
+  if (!clips?.length) return null;
+  const preferred = clips.find((c) => c.name.toLowerCase().includes(preferredClip.toLowerCase()));
+  if (preferred) return preferred;
+  return clips.find((c) => /walk/i.test(c.name))
+    || clips.find((c) => /run/i.test(c.name))
+    || clips.find((c) => /idle/i.test(c.name))
+    || clips[0];
+}
+
 function findElephantSkinnedMesh(model) {
   let best = null;
   let fallback = null;
@@ -605,7 +616,7 @@ function findElephantSkinnedMesh(model) {
   return best || fallback;
 }
 
-function secureElephantRig(model) {
+function ensureElephantVisible(model) {
   const skinned = findElephantSkinnedMesh(model);
   if (!skinned) {
     console.warn('[AR] Elephant skinned mesh not found');
@@ -616,57 +627,92 @@ function secureElephantRig(model) {
   skinned.frustumCulled = false;
   skinned.matrixAutoUpdate = true;
 
+  let parent = skinned.parent;
+  while (parent && parent !== model) {
+    parent.visible = true;
+    parent.matrixAutoUpdate = true;
+    parent = parent.parent;
+  }
+
   const skeleton = skinned.skeleton;
   if (skeleton) {
     skeleton.bones.forEach((bone) => {
       bone.visible = true;
       bone.matrixAutoUpdate = true;
     });
-    skeleton.pose();
     skeleton.update();
   }
 
   model.traverse((child) => {
-    if (!child.isBone) return;
+    if (!child.isBone && !child.isSkinnedMesh) return;
     const n = (child.name || '').toLowerCase();
-    if (n.includes('bip') || n.includes('bn_') || n.includes('armature') || n.includes('rootjoint')) {
+    if (
+      child.isSkinnedMesh
+      || n.includes('bip')
+      || n.includes('bn_')
+      || n.includes('armature')
+      || n.includes('rootjoint')
+      || n.includes('object_5')
+    ) {
       child.visible = true;
+      child.frustumCulled = false;
       child.matrixAutoUpdate = true;
     }
   });
 
   model.updateMatrixWorld(true);
-  console.info('[AR] Elephant rig secured:', skinned.name);
   return skinned;
 }
 
-function pickElephantWalkClip(clips, preferredClip = 'walk') {
-  if (!clips?.length) return null;
-  const preferred = clips.find((c) => c.name.toLowerCase().includes(preferredClip.toLowerCase()));
-  if (preferred) return preferred;
-  return clips.find((c) => /walk/i.test(c.name))
-    || clips.find((c) => /run/i.test(c.name))
-    || clips.find((c) => /idle/i.test(c.name))
-    || clips[0];
+function initElephantBindPose(model) {
+  const skinned = findElephantSkinnedMesh(model);
+  if (!skinned?.skeleton) return null;
+  skinned.skeleton.pose();
+  skinned.skeleton.update();
+  model.updateMatrixWorld(true);
+  return skinned;
 }
 
-function filterWalkClipInPlace(clip, skinned) {
-  const boneNames = new Set((skinned.skeleton?.bones || []).map((b) => b.name));
-  const tracks = clip.tracks.filter((track) => {
-    const parts = track.name.split('.');
-    const prop = parts[parts.length - 1];
-    if (prop !== 'quaternion') return false;
+function createElephantRootPin(skinned) {
+  if (!skinned?.skeleton) return () => {};
+  const pinned = [];
+  skinned.skeleton.bones.forEach((bone) => {
+    if (/^(_rootjoint|hips_01|bip01_pelvis)/i.test(bone.name)) {
+      pinned.push({ bone, pos: bone.position.clone() });
+    }
+  });
+  return () => {
+    pinned.forEach(({ bone, pos }) => bone.position.copy(pos));
+  };
+}
 
-    const node = parts[0].split('/').pop();
-    if (boneNames.has(node)) return true;
-    return /object_5|armature|bip|bn_/i.test(track.name);
+const ROOT_MOTION_NODES = /^(_rootjoint|hips_01|bip01_pelvis)/i;
+
+function trackNodeName(track) {
+  const dot = track.name.lastIndexOf('.');
+  const path = dot < 0 ? track.name : track.name.slice(0, dot);
+  return path.split('/').pop();
+}
+
+function trackProp(track) {
+  const dot = track.name.lastIndexOf('.');
+  return dot < 0 ? '' : track.name.slice(dot + 1);
+}
+
+function filterWalkClipSafe(clip) {
+  const tracks = clip.tracks.filter((track) => {
+    const prop = trackProp(track);
+    const node = trackNodeName(track);
+    if (prop === 'scale') return false;
+    if (prop === 'position' && ROOT_MOTION_NODES.test(node)) return false;
+    return true;
   });
   if (!tracks.length) return clip;
   return new THREE.AnimationClip(clip.name, clip.duration, tracks);
 }
 
 function setupElephantWalk(model, clips, preferredClip = 'walk') {
-  const skinned = secureElephantRig(model);
+  const skinned = ensureElephantVisible(model);
   if (!skinned) return null;
 
   const clip = pickElephantWalkClip(clips, preferredClip);
@@ -675,31 +721,30 @@ function setupElephantWalk(model, clips, preferredClip = 'walk') {
     return null;
   }
 
-  const walkClip = filterWalkClipInPlace(clip, skinned);
+  const walkClip = filterWalkClipSafe(clip);
+  const pinRoot = createElephantRootPin(skinned);
   const mixer = new THREE.AnimationMixer(model);
   const action = mixer.clipAction(walkClip);
   action.setLoop(THREE.LoopRepeat);
-  action.setEffectiveTimeScale(1);
-  action.setEffectiveWeight(1);
   action.play();
-  console.info('[AR] Elephant in-place walk:', walkClip.name, `(${walkClip.tracks.length} rot tracks)`);
-
-  const resetWalk = () => {
-    secureElephantRig(model);
-    action.reset();
-    action.paused = false;
-    action.play();
-  };
+  console.info('[AR] Elephant walk:', walkClip.name, `(${walkClip.tracks.length} tracks)`);
 
   return {
     skinned,
-    reset: resetWalk,
+    reset() {
+      action.reset();
+      action.paused = false;
+      action.play();
+      pinRoot();
+    },
     update(delta) {
       mixer.update(delta);
+      pinRoot();
       skinned.skeleton?.update();
     },
     play() {
-      resetWalk();
+      action.paused = false;
+      action.play();
     },
     pause() {
       action.paused = true;
@@ -1026,9 +1071,8 @@ async function initAR() {
         if (on && child.isSkinnedMesh) child.frustumCulled = false;
       });
       if (on) {
-        secureElephantRig(model);
-        if (item.anim?.reset) item.anim.reset();
-        else item.anim?.play();
+        ensureElephantVisible(model);
+        item.anim?.reset?.() || item.anim?.play();
       } else {
         item.anim?.pause();
       }
@@ -1090,7 +1134,7 @@ async function initAR() {
     }
 
     showExperience(expId);
-    secureElephantRig(entry.holder.children[0]);
+    ensureElephantVisible(entry.holder.children[0]);
     entry.anim?.reset?.();
     applyUserTransform(slot);
     setLoadStatus('');
@@ -1312,9 +1356,6 @@ async function initAR() {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
       pickActive();
-      if (activeRegistry?.anim?.reset && isSlotTracked(slot)) {
-        activeRegistry.anim.reset();
-      }
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);

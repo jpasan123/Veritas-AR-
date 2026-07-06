@@ -5,7 +5,7 @@ const LOCATIONS = {
   'veritas-ar': {
     id: 'veritas-ar',
     targetIndices: [0, 1],
-    modelSrc: 'assets/veritas-ar-final.glb',
+    modelSrc: 'assets/veritas-ar-plain.glb',
     modelScale: 0.85,
     modelOffset: { x: 0, y: 0.06, z: 0.03 },
     fitMode: 'ground',
