@@ -270,6 +270,25 @@ function stabilizeTowerPivot(model) {
   });
 }
 
+function stabilizeDioramaRoot(model) {
+  model.traverse((child) => {
+    if (!child.isMesh) return;
+    const name = child.name || '';
+    if (name.startsWith('tripo_node')) {
+      child.rotation.set(0, 0, 0);
+    }
+  });
+}
+
+function freezeStaticModel(model) {
+  model.traverse((child) => {
+    if (child === model) return;
+    child.matrixAutoUpdate = false;
+    child.updateMatrix();
+  });
+  model.updateMatrixWorld(true);
+}
+
 function preNormalizeModel(model) {
   model.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model);
@@ -443,6 +462,7 @@ async function buildExperience(exp, slot, onProgress) {
   sanitizeScene(model);
   removeSkinnedRig(model);
   stabilizeTowerPivot(model);
+  stabilizeDioramaRoot(model);
   let logoMesh = detachLogoForFitting(model, exp);
   preNormalizeModel(model);
   prepareModel(model);
@@ -457,6 +477,7 @@ async function buildExperience(exp, slot, onProgress) {
     logoMesh !== null,
   );
   mountLogoOnTower(model, logoMesh, exp);
+  if (exp.playAnimation === false) freezeStaticModel(model);
   holder.add(model);
 
   if (slot) slot.attachRig.add(holder);
@@ -700,7 +721,7 @@ function bindButton(el, handler) {
 }
 
 function configureRenderer(renderer) {
-  const maxDpr = LOW_END ? 1 : (IS_ANDROID ? 1.5 : 1.5);
+  const maxDpr = LOW_END ? 1 : (IS_ANDROID ? 1.15 : 1.35);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setClearColor(0x000000, 0);
@@ -767,7 +788,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = setup.mode === 'all' ? 2 : Math.min(slotCount, 3);
+  const maxTrack = 1;
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
@@ -991,7 +1012,7 @@ async function initAR() {
     document.documentElement.style.height = `${h}px`;
     document.body.style.height = `${h}px`;
 
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, IS_ANDROID ? 1.25 : 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, LOW_END ? 1 : (IS_ANDROID ? 1.15 : 1.35)));
     renderer.setSize(w, h, true);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();

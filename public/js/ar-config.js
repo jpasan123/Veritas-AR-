@@ -4,10 +4,10 @@
 const LOCATIONS = {
   'veritas-ar': {
     id: 'veritas-ar',
-    targetIndices: [0, 1],
-    modelSrc: 'assets/veritas-ar-plain.glb',
+    targetIndices: [0],
+    modelSrc: 'assets/veritas-ar-fast.glb',
     modelScale: 0.72,
-    modelOffset: { x: 0, y: 0.04, z: 0.06 },
+    modelOffset: { x: 0, y: 0.03, z: 0.05 },
     fitMode: 'ground',
     fitLift: 0.35,
     preloadRequired: true,
@@ -16,7 +16,7 @@ const LOCATIONS = {
     defaultUserZoom: 1,
     defaultUserYOffset: 0,
     landscape: {
-      modelOffset: { x: 0, y: 0.04, z: 0.06 },
+      modelOffset: { x: 0, y: 0.03, z: 0.05 },
       defaultUserYOffset: 0,
     },
   },
@@ -26,16 +26,16 @@ export const MODES = {
   all: {
     targetSrc: 'targets.mind',
     experiences: [LOCATIONS['veritas-ar']],
-    targetPriority: [0, 1],
+    targetPriority: [0],
     facadeTargetIndices: [],
   },
 };
 
 export const AR_SETTINGS = {
-  posSmooth: 0.035,
-  rotSmooth: 0.035,
-  scaleSmooth: 0.045,
-  scaleCalibrateFrames: 12,
+  posSmooth: 0.02,
+  rotSmooth: 0.02,
+  scaleSmooth: 0.03,
+  scaleCalibrateFrames: 18,
   defaultUserZoom: 1,
   minUserZoom: 0.55,
   maxUserZoom: 1.8,
@@ -44,9 +44,9 @@ export const AR_SETTINGS = {
   minUserYOffset: -0.3,
   maxUserYOffset: 0.35,
   positionStep: 0.06,
-  targetLostDelayMs: 500,
-  filterMinCF: 0.001,
-  filterBeta: 0.0008,
+  targetLostDelayMs: 1800,
+  filterMinCF: 0.00005,
+  filterBeta: 0.00005,
   minCameraZoom: 1,
   maxCameraZoom: 3,
   cameraZoomStep: 0.25,
