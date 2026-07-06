@@ -4,11 +4,10 @@
 const LOCATIONS = {
   'veritas-ar': {
     id: 'veritas-ar',
-    targetIndices: [0, 1, 2],
+    targetIndices: [0],
     modelSrc: 'assets/veritas-ar-ready.glb',
     modelSrcMobile: 'assets/veritas-ar-ready-mobile.glb',
-    modelScale: 0.62,
-    bannerFit: 0.78,
+    modelScale: 0.80,
     modelOffset: { x: 0, y: 0, z: 0 },
     fitMode: 'ground',
     fitBounds: 'diorama',
@@ -31,7 +30,7 @@ export const MODES = {
   all: {
     targetSrc: 'targets.mind',
     experiences: [LOCATIONS['veritas-ar']],
-    targetPriority: [0, 1, 2],
+    targetPriority: [0],
     facadeTargetIndices: [],
   },
 };

@@ -506,7 +506,6 @@ async function buildExperience(exp, slot, onProgress) {
     exp.fitBounds,
     exp.fitHeightFactor,
     logoMesh !== null,
-    exp.bannerFit,
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
@@ -575,7 +574,7 @@ function getFitBox(model, fitBounds, excludeLogoMesh = false) {
   return found ? box : new THREE.Box3().setFromObject(model);
 }
 
-function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor, excludeLogoMesh = false, bannerFit) {
+function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor, excludeLogoMesh = false) {
   const box = getFitBox(model, fitBounds, excludeLogoMesh);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
@@ -603,18 +602,14 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   }
 
   let scaleBase;
-  if (fitBounds === 'diorama' && fitMode === 'ground') {
-    scaleBase = size.x * 1.08;
-  } else if (fitMode === 'facade' || fitMode === 'center') {
+  if (fitMode === 'facade' || fitMode === 'center') {
     scaleBase = Math.max(size.x, size.y * (fitHeightFactor ?? 0.88));
   } else if (fitMode === 'diorama') {
     scaleBase = Math.max(size.x, size.y * 0.92);
   } else {
     scaleBase = Math.max(size.x, size.y, size.z);
   }
-
-  const fit = typeof bannerFit === 'number' ? bannerFit : 1;
-  model.scale.setScalar((modelScale * fit) / Math.max(scaleBase, 0.0001));
+  model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
 }
 
 function getElephantFootY(skinned, armature) {
@@ -1585,7 +1580,6 @@ async function initAR() {
     for (const idx of TARGET_PRIORITY) {
       const slot = slots.find((s) => s.targetIndex === idx && found.has(s));
       if (!slot) continue;
-      if (slot.targetIndex < (AR_SETTINGS.minBannerTargetIndex ?? 0)) continue;
       lockedSlot = slot;
       lockedTargetIndex = idx;
       smoothFrameCount = 0;

@@ -1,8 +1,7 @@
 /**
- * MindAR targets — full banner crops only (logo crop causes giant model scale).
+ * MindAR — single full-banner target only.
+ * Multiple crops share one banner but have different anchor origins → jitter + scale jumps.
  */
 module.exports = [
-  { id: 'banner-full', file: 'tracking/banner-full.jpeg', mime: 'image/jpeg' },
   { id: 'banner-enhanced', file: 'tracking/banner-enhanced.jpeg', mime: 'image/jpeg' },
-  { id: 'banner-top', file: 'tracking/banner-top.jpeg', mime: 'image/jpeg' },
 ];
