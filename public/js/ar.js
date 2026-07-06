@@ -500,8 +500,8 @@ async function buildExperience(exp, slot, onProgress) {
     logoMesh !== null,
   );
   mountLogoOnTower(model, logoMesh, exp);
+  anchorElephantToGround(model);
   holder.add(model);
-  ensureElephantVisible(model);
 
   if (slot) slot.attachRig.add(holder);
 
@@ -522,6 +522,14 @@ async function buildExperience(exp, slot, onProgress) {
 
 function getFitBox(model, fitBounds, excludeLogoMesh = false) {
   model.updateMatrixWorld(true);
+
+  if (fitBounds === 'diorama') {
+    const tripo = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
+    if (tripo) {
+      const box = new THREE.Box3().setFromObject(tripo);
+      if (!box.isEmpty()) return box;
+    }
+  }
 
   if (fitBounds !== 'mesh') {
     const box = new THREE.Box3();
@@ -592,6 +600,42 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
     scaleBase = Math.max(size.x, size.y, size.z);
   }
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
+}
+
+function anchorElephantToGround(model) {
+  const tripo = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
+  const armature = model.getObjectByName('Object_5.002');
+  const skinned = model.getObjectByName('Object_59') || findElephantSkinnedMesh(model);
+  if (!tripo || !armature) return;
+
+  model.updateMatrixWorld(true);
+
+  if (armature.parent !== tripo) {
+    tripo.attach(armature);
+  }
+
+  model.updateMatrixWorld(true);
+
+  const groundBox = new THREE.Box3().setFromObject(tripo);
+  const elephantBox = new THREE.Box3();
+  if (skinned?.geometry?.attributes?.position) {
+    elephantBox.setFromBufferAttribute(skinned.geometry.attributes.position);
+    elephantBox.applyMatrix4(skinned.matrixWorld);
+  } else {
+    elephantBox.setFromObject(armature);
+  }
+
+  if (groundBox.isEmpty() || elephantBox.isEmpty()) return;
+
+  const dy = groundBox.min.y - elephantBox.min.y + 0.015;
+  if (Math.abs(dy) > 0.001) {
+    const wp = armature.getWorldPosition(new THREE.Vector3());
+    wp.y += dy;
+    tripo.worldToLocal(wp);
+    armature.position.copy(wp);
+    model.updateMatrixWorld(true);
+    console.info('[AR] Elephant grounded, dy', dy.toFixed(4));
+  }
 }
 
 function pickElephantWalkClip(clips, preferredClip = 'walk') {
@@ -1427,8 +1471,9 @@ async function initAR() {
   slots.forEach((slot) => {
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
+      const wasFound = found.has(slot);
       found.add(slot);
-      resetSlotSmoothing(slot);
+      if (!wasFound) resetSlotSmoothing(slot);
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
