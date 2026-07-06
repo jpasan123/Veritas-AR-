@@ -1042,7 +1042,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = 1;
+  const maxTrack = Math.min(slotCount, 2);
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
@@ -1074,6 +1074,7 @@ async function initAR() {
     invRaw: new THREE.Matrix4(),
     localMat: new THREE.Matrix4(),
     unitScale: new THREE.Vector3(1, 1, 1),
+    decompScale: new THREE.Vector3(),
   };
 
   for (let i = 0; i < slotCount; i++) {
@@ -1175,8 +1176,9 @@ async function initAR() {
       _smoothTmp.localMat.decompose(
         slot.smoothRig.position,
         slot.smoothRig.quaternion,
-        slot.smoothRig.scale,
+        _smoothTmp.decompScale,
       );
+      slot.smoothRig.scale.set(1, 1, 1);
     });
   };
 
@@ -1267,6 +1269,11 @@ async function initAR() {
 
     showExperience(expId);
     ensureElephantVisible(entry.holder.children[0]);
+    entry.holder.visible = true;
+    entry.holder.traverse((child) => {
+      child.visible = true;
+      if (child.isSkinnedMesh) child.frustumCulled = false;
+    });
     entry.anim?.reset?.();
     applyUserTransform(slot);
     setLoadStatus('');
@@ -1489,6 +1496,7 @@ async function initAR() {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
       pickActive();
+      void ensureActiveVisible();
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
