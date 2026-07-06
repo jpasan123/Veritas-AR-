@@ -47,7 +47,7 @@ export const AR_SETTINGS = {
   minUserYOffset: -0.2,
   maxUserYOffset: 0.35,
   positionStep: 0.06,
-  targetLostDelayMs: 2000,
+  targetLostDelayMs: 3500,
   filterMinCF: 0.0001,
   filterBeta: 0.00025,
   minCameraZoom: 1,

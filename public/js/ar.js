@@ -650,10 +650,14 @@ function pickElephantWalkClip(clips, preferredClip = 'walk') {
     || clips[0];
 }
 
-function filterClipToElephantBones(clip, skinned) {
+function filterWalkClipInPlace(clip, skinned) {
   const boneNames = new Set((skinned.skeleton?.bones || []).map((b) => b.name));
   const tracks = clip.tracks.filter((track) => {
-    const node = track.name.split('.')[0].split('/').pop();
+    const parts = track.name.split('.');
+    const prop = parts[parts.length - 1];
+    if (prop !== 'quaternion') return false;
+
+    const node = parts[0].split('/').pop();
     if (boneNames.has(node)) return true;
     return /object_5|armature|bip|bn_/i.test(track.name);
   });
@@ -671,24 +675,31 @@ function setupElephantWalk(model, clips, preferredClip = 'walk') {
     return null;
   }
 
-  const walkClip = filterClipToElephantBones(clip, skinned);
+  const walkClip = filterWalkClipInPlace(clip, skinned);
   const mixer = new THREE.AnimationMixer(model);
   const action = mixer.clipAction(walkClip);
   action.setLoop(THREE.LoopRepeat);
   action.setEffectiveTimeScale(1);
   action.setEffectiveWeight(1);
   action.play();
-  console.info('[AR] Elephant walk active:', walkClip.name, `(${walkClip.tracks.length} tracks)`);
+  console.info('[AR] Elephant in-place walk:', walkClip.name, `(${walkClip.tracks.length} rot tracks)`);
+
+  const resetWalk = () => {
+    secureElephantRig(model);
+    action.reset();
+    action.paused = false;
+    action.play();
+  };
 
   return {
     skinned,
+    reset: resetWalk,
     update(delta) {
       mixer.update(delta);
       skinned.skeleton?.update();
     },
     play() {
-      action.paused = false;
-      action.play();
+      resetWalk();
     },
     pause() {
       action.paused = true;
@@ -1009,19 +1020,27 @@ async function initAR() {
     expRegistry.forEach((item) => {
       const on = item === entry;
       item.holder.visible = on;
+      const model = item.holder.children[0];
       item.holder.traverse((child) => {
         child.visible = on;
         if (on && child.isSkinnedMesh) child.frustumCulled = false;
       });
       if (on) {
-        secureElephantRig(item.holder.children[0]);
-        item.anim?.play();
+        secureElephantRig(model);
+        if (item.anim?.reset) item.anim.reset();
+        else item.anim?.play();
       } else {
         item.anim?.pause();
       }
     });
     activeRegistry = entry;
     return true;
+  };
+
+  const isSlotTracked = (slot) => {
+    if (!slot) return false;
+    if (found.has(slot)) return true;
+    return slots.some((s) => s.experience?.id === slot.experience?.id && found.has(s));
   };
 
   const slotByExp = new Map();
@@ -1071,17 +1090,23 @@ async function initAR() {
     }
 
     showExperience(expId);
+    secureElephantRig(entry.holder.children[0]);
+    entry.anim?.reset?.();
     applyUserTransform(slot);
     setLoadStatus('');
     return true;
   };
 
   const ensureActiveVisible = async () => {
-    if (!activeSlot?.experience || !found.has(activeSlot)) return;
+    if (!activeSlot?.experience || !isSlotTracked(activeSlot)) return;
     await mountToSlot(activeSlot, activeSlot.experience.id);
     if (activeRegistry?.holder) {
       activeRegistry.holder.visible = true;
-      activeRegistry.holder.traverse((child) => { child.visible = true; });
+      activeRegistry.holder.traverse((child) => {
+        child.visible = true;
+        if (child.isSkinnedMesh) child.frustumCulled = false;
+      });
+      activeRegistry.anim?.reset?.();
     }
   };
 
@@ -1287,15 +1312,21 @@ async function initAR() {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
       pickActive();
+      if (activeRegistry?.anim?.reset && isSlotTracked(slot)) {
+        activeRegistry.anim.reset();
+      }
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
       if (lockedTargetIndex === slot.targetIndex) lockedTargetIndex = null;
-      if (activeSlot === slot) {
+      const stillTracked = slots.some((s) => s.experience?.id === slot.experience?.id && found.has(s));
+      if (activeSlot === slot && !stillTracked) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
-          if (!found.has(slot)) pickActive();
+          if (!isSlotTracked(activeSlot)) pickActive();
         }, AR_SETTINGS.targetLostDelayMs);
+      } else if (stillTracked) {
+        pickActive();
       }
     };
   });
@@ -1367,7 +1398,7 @@ async function initAR() {
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
         if (activeSlot) applyUserTransform(activeSlot);
-        if (activeRegistry?.anim && activeSlot && found.has(activeSlot)) {
+        if (activeRegistry?.anim && isSlotTracked(activeSlot)) {
           activeRegistry.anim.update(delta);
         }
         renderer.render(scene, camera);
