@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { MindARThree } from 'mindar-image-three';
 import { AR_SETTINGS, getSetup, experienceForTarget, targetCount } from './ar-config.js';
 
@@ -323,12 +324,24 @@ function simplifyLogoMesh(logo) {
   return plane;
 }
 
+function countVertices(root) {
+  let count = 0;
+  root.traverse((child) => {
+    if (child.isMesh) count += child.geometry?.attributes?.position?.count ?? 0;
+  });
+  return count;
+}
+
 function optimizeModelForDevice(model, logoMesh) {
-  if (!LOW_END) return logoMesh;
-  let logo = logoMesh;
-  if (logo) logo = simplifyLogoMesh(logo);
-  lightenMaterials(model);
-  return logo;
+  const verts = countVertices(model);
+  if (LOW_END) {
+    let logo = logoMesh;
+    if (logo) logo = simplifyLogoMesh(logo);
+    lightenMaterials(model);
+    return logo;
+  }
+  if (IS_ANDROID && verts > 250000) lightenMaterials(model);
+  return logoMesh;
 }
 
 function prepareModel(scene) {
@@ -368,6 +381,7 @@ async function loadModelAsset(src, onProgress) {
     try {
       return await new Promise((resolve, reject) => {
         const loader = new GLTFLoader();
+        loader.setMeshoptDecoder(MeshoptDecoder);
         loader.load(
           src,
           (gltf) => {
@@ -424,7 +438,12 @@ async function buildExperience(exp, slot, onProgress) {
 
   const anim = exp.playAnimation === false
     ? null
-    : setupAnimations(model, asset.animations, exp.animationExclude ?? []);
+    : setupAnimations(
+      model,
+      asset.animations,
+      exp.animationExclude ?? [],
+      exp.preferredAnimation ?? '',
+    );
 
   return { holder, anim };
 }
@@ -498,13 +517,19 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
 }
 
-function setupAnimations(root, clips, excludeTracks = []) {
+function setupAnimations(root, clips, excludeTracks = [], preferredClip = '') {
   if (!clips?.length) return null;
+
+  let useClips = clips;
+  if (preferredClip) {
+    const matched = clips.filter((clip) => clip.name.includes(preferredClip));
+    if (matched.length) useClips = matched;
+  }
 
   const mixer = new THREE.AnimationMixer(root);
   const actions = [];
 
-  clips.forEach((clip) => {
+  useClips.forEach((clip) => {
     const tracks = clip.tracks.filter(
       (track) => !excludeTracks.some((key) => track.name.includes(key)),
     );
@@ -718,6 +743,7 @@ async function initAR() {
 
   const slotCount = targetCount(EXPERIENCES);
   const maxTrack = setup.mode === 'all' ? 2 : Math.min(slotCount, 3);
+  const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
     mindar = new MindARThree({
@@ -871,7 +897,7 @@ async function initAR() {
   };
 
   const showStartWhenReady = async () => {
-    if (IS_ANDROID && setup.mode !== 'all') {
+    if (forcePreload || (IS_ANDROID && setup.mode !== 'all')) {
       setLoadStatus('Loading 3D model… 0%');
       try {
         expRegistry = await loadExperiences(slots, (expId, pct) => {
@@ -889,10 +915,10 @@ async function initAR() {
     }
     hide('loading-screen');
     show('start-screen');
-    setLoadStatus(IS_ANDROID ? 'Ready — tap to start' : '');
+    setLoadStatus('Ready — tap to start');
   };
 
-  if (IS_ANDROID && setup.mode !== 'all') {
+  if (forcePreload || (IS_ANDROID && setup.mode !== 'all')) {
     show('loading-screen');
     const titleEl = document.querySelector('#loading-screen .loader-title');
     if (titleEl) titleEl.textContent = 'Loading 3D model…';
@@ -900,9 +926,8 @@ async function initAR() {
     hide('loading-screen');
     show('start-screen');
   }
-  setLoadStatus(IS_ANDROID ? 'Loading 3D model…' : 'Loading 3D model…');
 
-  const modelReady = IS_ANDROID
+  const modelReady = (forcePreload || (IS_ANDROID && setup.mode !== 'all'))
     ? showStartWhenReady()
     : loadExperiences(slots, (expId, pct) => {
         setLoadStatus(`Loading 3D model… ${Math.round(pct * 100)}%`);
