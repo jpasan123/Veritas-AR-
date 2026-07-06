@@ -462,7 +462,6 @@ async function buildExperience(exp, slot, onProgress) {
   sanitizeScene(model);
   removeSkinnedRig(model);
   stabilizeTowerPivot(model);
-  stabilizeDioramaRoot(model);
   let logoMesh = detachLogoForFitting(model, exp);
   preNormalizeModel(model);
   prepareModel(model);
@@ -477,7 +476,6 @@ async function buildExperience(exp, slot, onProgress) {
     logoMesh !== null,
   );
   mountLogoOnTower(model, logoMesh, exp);
-  if (exp.playAnimation === false) freezeStaticModel(model);
   holder.add(model);
 
   if (slot) slot.attachRig.add(holder);
@@ -758,9 +756,11 @@ async function loadExperiences(slots, onProgress) {
         onProgress?.(exp.id, pct);
       });
       registry.set(exp.id, entry);
+      console.info('[AR] Model ready:', exp.id, exp.modelSrc);
       if (IS_ANDROID) await new Promise((r) => setTimeout(r, 50));
     } catch (err) {
       console.error(`[AR] Failed to load model for ${exp.id}:`, err);
+      setLoadStatus(`Model load failed: ${err?.message || 'check connection'}`);
     }
   }
 
@@ -788,7 +788,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = 1;
+  const maxTrack = Math.min(slotCount, 2);
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
