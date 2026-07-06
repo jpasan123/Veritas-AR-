@@ -4,7 +4,7 @@
 const LOCATIONS = {
   'veritas-ar': {
     id: 'veritas-ar',
-    targetIndices: [0, 1],
+    targetIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8],
     modelSrc: 'assets/veritas-ar-ready.glb',
     modelSrcMobile: 'assets/veritas-ar-ready-mobile.glb',
     modelScale: 0.88,
@@ -30,15 +30,15 @@ export const MODES = {
   all: {
     targetSrc: 'targets.mind',
     experiences: [LOCATIONS['veritas-ar']],
-    targetPriority: [1, 0],
+    targetPriority: [1, 8, 2, 3, 4, 5, 6, 7, 0],
     facadeTargetIndices: [],
   },
 };
 
 export const AR_SETTINGS = {
-  posSmooth: 0.07,
-  rotSmooth: 0.06,
-  scaleSmooth: 0.03,
+  posSmooth: 0.05,
+  rotSmooth: 0.04,
+  scaleSmooth: 0.025,
   scaleCalibrateFrames: 14,
   defaultUserZoom: 1,
   minUserZoom: 0.55,
@@ -48,9 +48,10 @@ export const AR_SETTINGS = {
   minUserYOffset: -0.2,
   maxUserYOffset: 0.35,
   positionStep: 0.06,
-  targetLostDelayMs: 4000,
-  filterMinCF: 0.0001,
-  filterBeta: 0.0006,
+  targetLostDelayMs: 5500,
+  targetLostSmoothResetMs: 900,
+  filterMinCF: 0.00025,
+  filterBeta: 0.00045,
   minCameraZoom: 1,
   maxCameraZoom: 3,
   cameraZoomStep: 0.25,

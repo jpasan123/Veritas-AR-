@@ -9,5 +9,8 @@
     "serve": "npx serve public -l 3000",
     "build": "echo 'Static site — no build step'",
     "deploy:vps": "./scripts/deploy.sh"
+  },
+  "dependencies": {
+    "sharp": "^0.35.3"
   }
 }

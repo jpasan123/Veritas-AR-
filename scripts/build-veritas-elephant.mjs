@@ -11,8 +11,9 @@ const input = process.argv[2] || path.join(ROOT, 'public/assets/veritas-ar-plain
 const output = process.argv[3] || path.join(ROOT, 'public/assets/veritas-ar-ready.glb');
 
 const SCALE_FIX = 250;
-const ROAD_Y_FRAC = 0.10;
+const ROAD_Y_FRAC = 0.07;
 const ROAD_Z_FRAC = 0.76;
+const ROAD_SINK = 0.035;
 
 if (!fs.existsSync(input)) {
   console.error('Input not found:', input);
@@ -87,7 +88,7 @@ function alignElephantOnRoad(tripoB, skinNode, armNode) {
   const armCenterZ = (armB.min[2] + armB.max[2]) * 0.5;
   const feetY = armB.min[1];
 
-  nudgeWorldTranslation(armNode, roadX - armCenterX, roadY - feetY, roadZ - armCenterZ);
+  nudgeWorldTranslation(armNode, roadX - armCenterX, roadY - feetY - ROAD_SINK, roadZ - armCenterZ);
 }
 
 function nudgeWorldTranslation(node, dx, dy, dz) {

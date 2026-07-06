@@ -13,8 +13,9 @@ if (!file || !fs.existsSync(file)) {
   process.exit(1);
 }
 
-const ROAD_Y_FRAC = 0.10;
+const ROAD_Y_FRAC = 0.07;
 const ROAD_Z_FRAC = 0.76;
+const ROAD_SINK = 0.035;
 
 const { NodeIO, getBounds } = await import('@gltf-transform/core');
 const { ALL_EXTENSIONS } = await import('@gltf-transform/extensions');
@@ -97,7 +98,7 @@ function alignElephantOnRoad(tripoB, skin, armNode) {
   const armCenterX = (armB.min[0] + armB.max[0]) * 0.5;
   const armCenterZ = (armB.min[2] + armB.max[2]) * 0.5;
   const feetY = armB.min[1];
-  nudgeWorldTranslation(armNode, roadX - armCenterX, roadY - feetY, roadZ - armCenterZ);
+  nudgeWorldTranslation(armNode, roadX - armCenterX, roadY - feetY - ROAD_SINK, roadZ - armCenterZ);
 }
 
 function nudgeWorldTranslation(node, dx, dy, dz) {

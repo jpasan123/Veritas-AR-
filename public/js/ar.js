@@ -612,6 +612,29 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
 }
 
+function getElephantFootY(skinned, armature) {
+  const skeleton = skinned?.skeleton;
+  if (skeleton?.bones?.length) {
+    const footBox = new THREE.Box3();
+    let hasFoot = false;
+    skeleton.bones.forEach((bone) => {
+      if (!/foot|toe|ankle|leg_0|leg_1|bip01_l_foot|bip01_r_foot/i.test(bone.name || '')) return;
+      footBox.expandByPoint(bone.getWorldPosition(new THREE.Vector3()));
+      hasFoot = true;
+    });
+    if (hasFoot && !footBox.isEmpty()) return footBox.min.y;
+  }
+
+  const box = new THREE.Box3();
+  if (skinned?.geometry?.attributes?.position) {
+    box.setFromBufferAttribute(skinned.geometry.attributes.position);
+    box.applyMatrix4(skinned.matrixWorld);
+  } else if (armature) {
+    box.setFromObject(armature);
+  }
+  return box.isEmpty() ? null : box.min.y;
+}
+
 function anchorElephantToGround(model) {
   const tripo = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
   const armature = model.getObjectByName('Object_5.002');
@@ -633,9 +656,13 @@ function anchorElephantToGround(model) {
   });
   if (tripoBox.isEmpty()) tripoBox.setFromObject(tripo);
   const tripoSize = tripoBox.getSize(new THREE.Vector3());
-  const roadY = tripoBox.min.y + tripoSize.y * 0.10;
+  const roadY = tripoBox.min.y + tripoSize.y * 0.07;
   const roadX = (tripoBox.min.x + tripoBox.max.x) * 0.5;
   const roadZ = tripoBox.min.z + tripoSize.z * 0.76;
+  const roadSink = 0.035;
+
+  const feetY = getElephantFootY(skinned, armature);
+  if (feetY == null || tripoBox.isEmpty()) return;
 
   const elephantBox = new THREE.Box3();
   if (skinned?.geometry?.attributes?.position) {
@@ -644,13 +671,11 @@ function anchorElephantToGround(model) {
   } else {
     elephantBox.setFromObject(armature);
   }
-
-  if (tripoBox.isEmpty() || elephantBox.isEmpty()) return;
+  if (elephantBox.isEmpty()) return;
 
   const eleCenter = elephantBox.getCenter(new THREE.Vector3());
-  const feetY = elephantBox.min.y;
   const dx = roadX - eleCenter.x;
-  const dy = roadY - feetY;
+  const dy = roadY - feetY - roadSink;
   const dz = roadZ - eleCenter.z;
 
   if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001 || Math.abs(dz) > 0.001) {
@@ -1079,7 +1104,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = Math.min(slotCount, 2);
+  const maxTrack = Math.min(slotCount, 6);
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
@@ -1137,6 +1162,7 @@ async function initAR() {
       smoothWorldPos: new THREE.Vector3(),
       smoothWorldQuat: new THREE.Quaternion(),
       smoothReady: false,
+      lostSmoothTimer: null,
     });
   }
 
@@ -1183,10 +1209,20 @@ async function initAR() {
 
   const resetSlotSmoothing = (slot) => {
     if (!slot) return;
+    clearTimeout(slot.lostSmoothTimer);
+    slot.lostSmoothTimer = null;
     slot.smoothReady = false;
     slot.smoothRig.position.set(0, 0, 0);
     slot.smoothRig.quaternion.identity();
     slot.smoothRig.scale.set(1, 1, 1);
+  };
+
+  const scheduleSmoothingReset = (slot) => {
+    if (!slot) return;
+    clearTimeout(slot.lostSmoothTimer);
+    slot.lostSmoothTimer = setTimeout(() => {
+      if (!found.has(slot)) resetSlotSmoothing(slot);
+    }, AR_SETTINGS.targetLostSmoothResetMs ?? 900);
   };
 
   const applyAnchorSmoothing = () => {
@@ -1536,6 +1572,8 @@ async function initAR() {
   slots.forEach((slot) => {
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
+      clearTimeout(slot.lostSmoothTimer);
+      slot.lostSmoothTimer = null;
       const wasFound = found.has(slot);
       found.add(slot);
       if (!wasFound) resetSlotSmoothing(slot);
@@ -1547,9 +1585,11 @@ async function initAR() {
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
-      resetSlotSmoothing(slot);
-      if (lockedTargetIndex === slot.targetIndex) lockedTargetIndex = null;
+      scheduleSmoothingReset(slot);
       const stillTracked = slots.some((s) => s.experience?.id === slot.experience?.id && found.has(s));
+      if (!stillTracked && lockedTargetIndex === slot.targetIndex) {
+        lockedTargetIndex = null;
+      }
       if (activeSlot === slot && !stillTracked) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
