@@ -1104,7 +1104,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = Math.min(slotCount, 8);
+  const maxTrack = 1;
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
@@ -1188,6 +1188,8 @@ async function initAR() {
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
   let lockedTargetIndex = null;
+  let lockedSlot = null;
+  let smoothFrameCount = 0;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1226,8 +1228,15 @@ async function initAR() {
   };
 
   const applyAnchorSmoothing = () => {
+    const warmup = smoothFrameCount < (AR_SETTINGS.smoothWarmupFrames ?? 24);
+    const posAlpha = warmup ? (AR_SETTINGS.posSmooth ?? 0.018) * 0.55 : (AR_SETTINGS.posSmooth ?? 0.018);
+    const rotAlpha = warmup ? (AR_SETTINGS.rotSmooth ?? 0.018) * 0.55 : (AR_SETTINGS.rotSmooth ?? 0.018);
+    const maxPos = AR_SETTINGS.maxPosDelta ?? 0.005;
+    const maxRot = AR_SETTINGS.maxRotDelta ?? 0.03;
+
     slots.forEach((slot) => {
       if (!found.has(slot)) return;
+      if (activeSlot && slot !== activeSlot) return;
 
       const anchor = slot.anchor.group;
       anchor.updateMatrixWorld(true);
@@ -1244,8 +1253,20 @@ async function initAR() {
         return;
       }
 
-      slot.smoothWorldPos.lerp(_smoothTmp.rawPos, AR_SETTINGS.posSmooth);
-      slot.smoothWorldQuat.slerp(_smoothTmp.rawQuat, AR_SETTINGS.rotSmooth);
+      const prevPos = slot.smoothWorldPos.clone();
+      const prevQuat = slot.smoothWorldQuat.clone();
+      slot.smoothWorldPos.lerp(_smoothTmp.rawPos, posAlpha);
+      slot.smoothWorldQuat.slerp(_smoothTmp.rawQuat, rotAlpha);
+
+      const posStep = slot.smoothWorldPos.distanceTo(prevPos);
+      if (posStep > maxPos) {
+        slot.smoothWorldPos.lerpVectors(prevPos, slot.smoothWorldPos, maxPos / posStep);
+      }
+
+      const rotStep = prevQuat.angleTo(slot.smoothWorldQuat);
+      if (rotStep > maxRot) {
+        slot.smoothWorldQuat.slerp(prevQuat, 1 - maxRot / Math.max(rotStep, 0.0001));
+      }
 
       _smoothTmp.smoothMat.compose(
         slot.smoothWorldPos,
@@ -1262,6 +1283,8 @@ async function initAR() {
       );
       slot.smoothRig.scale.set(1, 1, 1);
     });
+
+    if (found.size > 0) smoothFrameCount += 1;
   };
 
   const hideAllHolders = () => {
@@ -1549,23 +1572,25 @@ async function initAR() {
   };
 
   const pickActive = () => {
-    if (lockedTargetIndex !== null) {
-      const locked = slots.find((s) => s.targetIndex === lockedTargetIndex && found.has(s));
-      if (locked) {
-        void setActive(locked);
-        return;
-      }
-      lockedTargetIndex = null;
+    if (lockedSlot && found.has(lockedSlot)) {
+      void setActive(lockedSlot);
+      return;
     }
 
     for (const idx of TARGET_PRIORITY) {
       const slot = slots.find((s) => s.targetIndex === idx && found.has(s));
       if (slot) {
+        lockedSlot = slot;
         lockedTargetIndex = idx;
+        smoothFrameCount = 0;
         void setActive(slot);
         return;
       }
     }
+
+    lockedSlot = null;
+    lockedTargetIndex = null;
+    smoothFrameCount = 0;
     void setActive(null);
   };
 
@@ -1576,7 +1601,10 @@ async function initAR() {
       slot.lostSmoothTimer = null;
       const wasFound = found.has(slot);
       found.add(slot);
-      if (!wasFound) resetSlotSmoothing(slot);
+      const siblingsTracked = slots.some(
+        (s) => s !== slot && s.experience?.id === slot.experience?.id && found.has(s),
+      );
+      if (!wasFound && !siblingsTracked) resetSlotSmoothing(slot);
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
@@ -1587,14 +1615,18 @@ async function initAR() {
       found.delete(slot);
       scheduleSmoothingReset(slot);
       const stillTracked = slots.some((s) => s.experience?.id === slot.experience?.id && found.has(s));
-      if (!stillTracked && lockedTargetIndex === slot.targetIndex) {
+      if (slot === lockedSlot && !stillTracked) {
+        lockedSlot = null;
         lockedTargetIndex = null;
+        smoothFrameCount = 0;
       }
       if (activeSlot === slot && !stillTracked) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
           if (!isSlotTracked(activeSlot)) pickActive();
         }, AR_SETTINGS.targetLostDelayMs);
+      } else if (stillTracked && activeSlot && found.has(activeSlot)) {
+        return;
       } else if (stillTracked) {
         pickActive();
       }
