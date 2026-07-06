@@ -501,9 +501,7 @@ async function buildExperience(exp, slot, onProgress) {
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
-  attachElephantToDiorama(model);
-  boostElephantToVisibleSize(model);
-  initElephantBindPose(model);
+  placeElephantOnDiorama(model);
   ensureElephantVisible(model);
 
   if (slot) slot.attachRig.add(holder);
@@ -597,47 +595,66 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   model.scale.setScalar(modelScale / Math.max(scaleBase, 0.0001));
 }
 
-function attachElephantToDiorama(model) {
+function placeElephantOnDiorama(model) {
+  if (model.userData.elephantPlaced) return null;
+
   const diorama = model.children.find((c) => (c.name || '').startsWith('tripo_node'));
   const armature = model.getObjectByName('Object_5.002');
-  if (!diorama || !armature || armature.parent === diorama) return;
-  diorama.attach(armature);
-  console.info('[AR] Elephant attached to diorama');
-}
-
-function boostElephantToVisibleSize(model) {
-  const armature = model.getObjectByName('Object_5.002');
-  const skinned = findElephantSkinnedMesh(model);
-  if (!armature || !skinned) {
-    console.warn('[AR] Elephant armature missing — cannot boost scale');
-    return;
+  const skinned = model.getObjectByName('Object_59') || findElephantSkinnedMesh(model);
+  if (!diorama || !armature || !skinned) {
+    console.warn('[AR] Elephant nodes missing', {
+      diorama: !!diorama,
+      armature: !!armature,
+      skinned: !!skinned,
+    });
+    return null;
   }
 
-  if (armature.userData.elephantBoosted) return;
+  let rig = model.getObjectByName('elephant-rig');
+  if (!rig) {
+    rig = new THREE.Group();
+    rig.name = 'elephant-rig';
+    model.add(rig);
+    rig.attach(armature);
+    rig.attach(skinned);
+    armature.scale.set(1, 1, 1);
+    skinned.scale.set(1, 1, 1);
+  }
 
   model.updateMatrixWorld(true);
-  const box = new THREE.Box3();
-  if (skinned.geometry?.attributes?.position) {
-    box.setFromBufferAttribute(skinned.geometry.attributes.position);
-    box.applyMatrix4(skinned.matrixWorld);
-  } else {
-    box.setFromObject(skinned);
+  const dBox = new THREE.Box3().setFromObject(diorama);
+  if (dBox.isEmpty()) return null;
+
+  const center = dBox.getCenter(new THREE.Vector3());
+  const size = dBox.getSize(new THREE.Vector3());
+
+  const geoBox = new THREE.Box3().setFromBufferAttribute(skinned.geometry.attributes.position);
+  const geoH = geoBox.getSize(new THREE.Vector3()).y;
+  const targetH = size.y * 0.2;
+  rig.scale.setScalar(targetH / Math.max(geoH, 0.001));
+
+  const worldPos = new THREE.Vector3(
+    center.x + size.x * 0.04,
+    dBox.min.y + size.y * 0.018,
+    center.z + size.z * 0.26,
+  );
+  model.worldToLocal(worldPos);
+  rig.position.copy(worldPos);
+  rig.rotation.set(0, -0.55, 0);
+
+  skinned.frustumCulled = false;
+  skinned.renderOrder = 2;
+  skinned.visible = true;
+
+  if (skinned.skeleton) {
+    skinned.skeleton.pose();
+    skinned.skeleton.update();
   }
 
-  const size = box.getSize(new THREE.Vector3());
-  const targetHeight = 0.38;
-
-  if (size.y < targetHeight * 0.5) {
-    const factor = size.y > 0.0001
-      ? Math.min(targetHeight / size.y, 400)
-      : 250;
-    armature.scale.multiplyScalar(factor);
-    skinned.scale.set(1, 1, 1);
-    model.updateMatrixWorld(true);
-    console.info('[AR] Elephant scale boosted x' + factor.toFixed(1), 'height', size.y.toFixed(5));
-  }
-
-  armature.userData.elephantBoosted = true;
+  model.updateMatrixWorld(true);
+  model.userData.elephantPlaced = true;
+  console.info('[AR] Elephant rig placed at', rig.position.toArray().map((v) => v.toFixed(3)));
+  return rig;
 }
 
 function pickElephantWalkClip(clips, preferredClip = 'walk') {
@@ -760,6 +777,7 @@ function setupElephantWalk(model, clips, preferredClip = 'walk') {
   const skinned = ensureElephantVisible(model);
   if (!skinned) return null;
 
+  const armature = model.getObjectByName('Object_5.002');
   const clip = pickElephantWalkClip(clips, preferredClip);
   if (!clip) {
     console.warn('[AR] Walk clip not found');
@@ -768,7 +786,7 @@ function setupElephantWalk(model, clips, preferredClip = 'walk') {
 
   const walkClip = filterWalkClipSafe(clip);
   const pinRoot = createElephantRootPin(skinned);
-  const mixer = new THREE.AnimationMixer(model);
+  const mixer = new THREE.AnimationMixer(armature || model);
   const action = mixer.clipAction(walkClip);
   action.setLoop(THREE.LoopRepeat);
   action.play();
