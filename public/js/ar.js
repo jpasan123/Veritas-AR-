@@ -52,10 +52,18 @@ const getViewportSize = () => {
   };
 };
 
-const getMarkerOffset = (exp) => {
+const getMarkerOffset = (exp, targetIndex = 0) => {
   if (!exp) return { x: 0, y: 0, z: 0 };
-  if (isLandscape() && exp.landscape?.modelOffset) return exp.landscape.modelOffset;
-  return exp.modelOffset ?? { x: 0, y: 0, z: 0 };
+  const landscape = isLandscape();
+  const base = landscape && exp.landscape?.modelOffset
+    ? exp.landscape.modelOffset
+    : (exp.modelOffset ?? { x: 0, y: 0, z: 0 });
+  const perTargetMap = landscape && exp.landscape?.targetOffsets
+    ? exp.landscape.targetOffsets
+    : exp.targetOffsets;
+  const perTarget = perTargetMap?.[targetIndex];
+  if (!perTarget) return { ...base };
+  return { ...base, ...perTarget };
 };
 
 const getDefaultYOffset = (exp) => {
@@ -511,6 +519,7 @@ async function buildExperience(exp, slot, onProgress) {
     exp.fitBounds,
     exp.fitHeightFactor,
     logoMesh !== null,
+    exp.fitCenterY,
   );
   mountLogoOnTower(model, logoMesh, exp);
   holder.add(model);
@@ -584,7 +593,7 @@ function getFitBox(model, fitBounds, excludeLogoMesh = false) {
   return found ? box : new THREE.Box3().setFromObject(model);
 }
 
-function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor, excludeLogoMesh = false) {
+function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fitHeightFactor, excludeLogoMesh = false, fitCenterY) {
   const box = getFitBox(model, fitBounds, excludeLogoMesh);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
@@ -609,6 +618,9 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
       break;
     case 'center':
     default:
+      if (typeof fitCenterY === 'number' && fitCenterY !== 0.5) {
+        model.position.y += size.y * (0.5 - fitCenterY);
+      }
       break;
   }
 
@@ -1153,7 +1165,7 @@ async function initAR() {
     const marker = new THREE.Object3D();
     const attachRig = new THREE.Group();
     attachRig.name = 'attach-rig';
-    const off = getMarkerOffset(exp);
+    const off = getMarkerOffset(exp, i);
     marker.position.set(off.x, off.y, off.z);
     marker.add(attachRig);
     anchor.group.add(marker);
@@ -1181,6 +1193,7 @@ async function initAR() {
   let orientationBusy = false;
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
+  let lockedSlot = null;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1349,10 +1362,11 @@ async function initAR() {
         setLoadStatus('Model failed to load. Refresh and try again.');
       });
 
-  const applyMarkerOffsets = () => {
-    slots.forEach((slot) => {
-      const off = getMarkerOffset(slot.experience);
-      slot.marker.position.set(off.x, off.y, off.z);
+  const applyMarkerOffsets = (slot) => {
+    const list = slot ? [slot] : slots;
+    list.forEach((s) => {
+      const off = getMarkerOffset(s.experience, s.targetIndex);
+      s.marker.position.set(off.x, off.y, off.z);
     });
   };
 
@@ -1465,18 +1479,27 @@ async function initAR() {
     }
 
     activeSlot = slot;
+    applyMarkerOffsets(slot);
     const mounted = await mountToSlot(slot, slot.experience.id);
     if (mounted) show('ar-controls');
   };
 
   const pickActive = () => {
+    if (lockedSlot && found.has(lockedSlot)) {
+      if (activeSlot !== lockedSlot) void setActive(lockedSlot);
+      return;
+    }
+
     for (const idx of TARGET_PRIORITY) {
       const slot = slots.find((s) => s.targetIndex === idx && found.has(s));
       if (slot) {
+        lockedSlot = slot;
         void setActive(slot);
         return;
       }
     }
+
+    lockedSlot = null;
     void setActive(null);
   };
 
@@ -1492,6 +1515,7 @@ async function initAR() {
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
+      if (slot === lockedSlot) lockedSlot = null;
       if (activeSlot === slot) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
