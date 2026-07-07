@@ -1203,6 +1203,8 @@ async function initAR() {
       experience: exp,
       smoothWorldPos: new THREE.Vector3(),
       smoothWorldQuat: new THREE.Quaternion(),
+      frozenAnchorMatrix: new THREE.Matrix4(),
+      hasFrozenMatrix: false,
       poseReady: false,
       trackingLive: false,
     });
@@ -1250,6 +1252,28 @@ async function initAR() {
     slot.stableRig.position.set(0, 0, 0);
     slot.stableRig.quaternion.identity();
     slot.stableRig.scale.set(1, 1, 1);
+  };
+
+  const captureAnchorPose = (slot) => {
+    if (!slot) return;
+    slot.anchor.group.updateMatrixWorld(true);
+    slot.frozenAnchorMatrix.copy(slot.anchor.group.matrix);
+    slot.hasFrozenMatrix = true;
+  };
+
+  const applyFrozenAnchor = (slot) => {
+    if (!slot?.hasFrozenMatrix) return;
+    slot.anchor.group.visible = true;
+    slot.anchor.group.matrix.copy(slot.frozenAnchorMatrix);
+  };
+
+  const keepModelVisible = () => {
+    if (!modelRevealed || !activeRegistry?.holder) return;
+    activeRegistry.holder.visible = true;
+    activeRegistry.holder.traverse((child) => {
+      child.visible = true;
+      if (child.isSkinnedMesh) child.frustumCulled = false;
+    });
   };
 
   const applyPoseSmoothing = (slot) => {
@@ -1494,7 +1518,10 @@ async function initAR() {
       lockedSlot = null;
       modelRevealed = false;
       lastTrackAt = 0;
-      slots.forEach(resetSlotPose);
+      slots.forEach((s) => {
+        resetSlotPose(s);
+        s.hasFrozenMatrix = false;
+      });
 
       await mindar.stop();
       await new Promise((r) => setTimeout(r, 120));
@@ -1616,21 +1643,25 @@ async function initAR() {
       clearTimeout(hideTimer);
       clearTimeout(recoverTimer);
       found.add(slot);
+      captureAnchorPose(slot);
 
-      if (sessionTargetIndex !== null && slot.targetIndex !== sessionTargetIndex) {
-        if (Date.now() - lastTrackAt < (AR_SETTINGS.targetRecoverMs ?? 3500)) return;
-        sessionTargetIndex = slot.targetIndex;
-        resetSlotPose(slot);
+      const sessionBlocked = sessionTargetIndex !== null
+        && slot.targetIndex !== sessionTargetIndex
+        && Date.now() - lastTrackAt < (AR_SETTINGS.targetRecoverMs ?? 3500);
+
+      if (!sessionBlocked) {
+        if (sessionTargetIndex !== null && slot.targetIndex !== sessionTargetIndex) {
+          sessionTargetIndex = slot.targetIndex;
+          resetSlotPose(slot);
+        }
+        if (sessionTargetIndex === null) {
+          sessionTargetIndex = slot.targetIndex;
+          resetSlotPose(slot);
+        }
+        slot.trackingLive = true;
+        lastTrackAt = Date.now();
+        modelRevealed = true;
       }
-
-      if (sessionTargetIndex === null) {
-        sessionTargetIndex = slot.targetIndex;
-        resetSlotPose(slot);
-      }
-
-      slot.trackingLive = true;
-      lastTrackAt = Date.now();
-      modelRevealed = true;
 
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
@@ -1639,6 +1670,7 @@ async function initAR() {
       void ensureActiveVisible();
     };
     slot.anchor.onTargetLost = () => {
+      captureAnchorPose(slot);
       found.delete(slot);
       if (slot.targetIndex === sessionTargetIndex) {
         slot.trackingLive = false;
@@ -1701,7 +1733,10 @@ async function initAR() {
       modelRevealed = false;
       lastTrackAt = 0;
       clearTimeout(recoverTimer);
-      slots.forEach(resetSlotPose);
+      slots.forEach((s) => {
+        resetSlotPose(s);
+        s.hasFrozenMatrix = false;
+      });
       lastLandscape = isLandscape();
       resizeAR();
       applyMarkerOffsets();
@@ -1726,7 +1761,15 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
-        if (activeSlot) applyPoseSmoothing(activeSlot);
+        if (activeSlot) {
+          if (activeSlot.trackingLive && found.has(activeSlot)) {
+            applyPoseSmoothing(activeSlot);
+            captureAnchorPose(activeSlot);
+          } else if (modelRevealed) {
+            applyFrozenAnchor(activeSlot);
+          }
+        }
+        keepModelVisible();
         if (activeRegistry?.anim && activeSlot) {
           activeRegistry.anim.update(delta);
         }
