@@ -1204,6 +1204,7 @@ async function initAR() {
       smoothWorldPos: new THREE.Vector3(),
       smoothWorldQuat: new THREE.Quaternion(),
       poseReady: false,
+      trackingLive: false,
     });
   }
 
@@ -1230,6 +1231,9 @@ async function initAR() {
   let pendingActiveSlot = null;
   let lockedSlot = null;
   let sessionTargetIndex = null;
+  let modelRevealed = false;
+  let lastTrackAt = 0;
+  let recoverTimer = null;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1249,7 +1253,7 @@ async function initAR() {
   };
 
   const applyPoseSmoothing = (slot) => {
-    if (!slot || !found.has(slot)) return;
+    if (!slot || !slot.trackingLive || !found.has(slot)) return;
 
     const anchor = slot.anchor.group;
     anchor.updateMatrixWorld(true);
@@ -1378,7 +1382,7 @@ async function initAR() {
   };
 
   const ensureActiveVisible = async () => {
-    if (!activeSlot?.experience || !found.has(activeSlot)) return;
+    if (!activeSlot?.experience) return;
     await mountToSlot(activeSlot, activeSlot.experience.id);
     if (activeRegistry?.holder) {
       activeRegistry.holder.visible = true;
@@ -1386,6 +1390,7 @@ async function initAR() {
         child.visible = true;
         if (child.isSkinnedMesh) child.frustumCulled = false;
       });
+      show('ar-controls');
     }
   };
 
@@ -1483,9 +1488,12 @@ async function initAR() {
       hideAllHolders();
       found.clear();
       clearTimeout(hideTimer);
+      clearTimeout(recoverTimer);
       activeSlot = null;
       sessionTargetIndex = null;
       lockedSlot = null;
+      modelRevealed = false;
+      lastTrackAt = 0;
       slots.forEach(resetSlotPose);
 
       await mindar.stop();
@@ -1571,11 +1579,16 @@ async function initAR() {
     if (sessionTargetIndex !== null) {
       const slot = slots.find((s) => s.targetIndex === sessionTargetIndex);
       if (slot && found.has(slot)) {
+        slot.trackingLive = true;
         lockedSlot = slot;
+        lastTrackAt = Date.now();
         if (activeSlot !== slot) void setActive(slot);
         return;
       }
-      return;
+      if (modelRevealed && slot) {
+        slot.trackingLive = false;
+        return;
+      }
     }
 
     for (const idx of TARGET_PRIORITY) {
@@ -1583,27 +1596,41 @@ async function initAR() {
       if (slot) {
         sessionTargetIndex = idx;
         lockedSlot = slot;
+        slot.trackingLive = true;
+        lastTrackAt = Date.now();
+        modelRevealed = true;
         resetSlotPose(slot);
         void setActive(slot);
         return;
       }
     }
 
-    lockedSlot = null;
-    void setActive(null);
+    if (!modelRevealed) {
+      lockedSlot = null;
+      void setActive(null);
+    }
   };
 
   slots.forEach((slot) => {
     slot.anchor.onTargetFound = () => {
-      if (sessionTargetIndex !== null && slot.targetIndex !== sessionTargetIndex) return;
-
       clearTimeout(hideTimer);
+      clearTimeout(recoverTimer);
       found.add(slot);
+
+      if (sessionTargetIndex !== null && slot.targetIndex !== sessionTargetIndex) {
+        if (Date.now() - lastTrackAt < (AR_SETTINGS.targetRecoverMs ?? 3500)) return;
+        sessionTargetIndex = slot.targetIndex;
+        resetSlotPose(slot);
+      }
 
       if (sessionTargetIndex === null) {
         sessionTargetIndex = slot.targetIndex;
         resetSlotPose(slot);
       }
+
+      slot.trackingLive = true;
+      lastTrackAt = Date.now();
+      modelRevealed = true;
 
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
@@ -1613,18 +1640,17 @@ async function initAR() {
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
-      if (sessionTargetIndex !== null && slot.targetIndex !== sessionTargetIndex) return;
-
-      if (activeSlot === slot) {
-        clearTimeout(hideTimer);
-        hideTimer = setTimeout(() => {
-          const sessionSlot = slots.find((s) => s.targetIndex === sessionTargetIndex);
-          if (!sessionSlot || !found.has(sessionSlot)) {
-            hideAllHolders();
-            hide('ar-controls');
-          }
-        }, AR_SETTINGS.targetLostDelayMs);
+      if (slot.targetIndex === sessionTargetIndex) {
+        slot.trackingLive = false;
       }
+
+      clearTimeout(recoverTimer);
+      recoverTimer = setTimeout(() => {
+        if (!slots.some((s) => s.targetIndex === sessionTargetIndex && found.has(s))) {
+          sessionTargetIndex = null;
+          lockedSlot = null;
+        }
+      }, AR_SETTINGS.targetRecoverMs ?? 3500);
     };
   });
 
@@ -1672,6 +1698,9 @@ async function initAR() {
       arRunning = true;
       sessionTargetIndex = null;
       lockedSlot = null;
+      modelRevealed = false;
+      lastTrackAt = 0;
+      clearTimeout(recoverTimer);
       slots.forEach(resetSlotPose);
       lastLandscape = isLandscape();
       resizeAR();
@@ -1697,8 +1726,8 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
-        if (activeSlot && found.has(activeSlot)) applyPoseSmoothing(activeSlot);
-        if (activeRegistry?.anim && activeSlot && found.has(activeSlot)) {
+        if (activeSlot) applyPoseSmoothing(activeSlot);
+        if (activeRegistry?.anim && activeSlot) {
           activeRegistry.anim.update(delta);
         }
         renderer.render(scene, camera);
