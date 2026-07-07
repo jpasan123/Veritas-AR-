@@ -1147,7 +1147,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = 1;
+  const maxTrack = 2;
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
@@ -1171,43 +1171,18 @@ async function initAR() {
   configureRenderer(renderer);
 
   const slots = [];
-  const _poseTmp = {
-    pos: new THREE.Vector3(),
-    quat: new THREE.Quaternion(),
-    mat: new THREE.Matrix4(),
-    inv: new THREE.Matrix4(),
-    local: new THREE.Matrix4(),
-    scale: new THREE.Vector3(1, 1, 1),
-    decomp: new THREE.Vector3(),
-  };
 
   for (let i = 0; i < slotCount; i++) {
     const exp = experienceForTarget(EXPERIENCES, i);
     const anchor = mindar.addAnchor(i);
-    const stableRig = new THREE.Group();
-    stableRig.name = 'stable-rig';
     const marker = new THREE.Object3D();
     const attachRig = new THREE.Group();
     attachRig.name = 'attach-rig';
     const off = getMarkerOffset(exp, i);
     marker.position.set(off.x, off.y, off.z);
     marker.add(attachRig);
-    stableRig.add(marker);
-    anchor.group.add(stableRig);
-    slots.push({
-      anchor,
-      stableRig,
-      marker,
-      attachRig,
-      targetIndex: i,
-      experience: exp,
-      smoothWorldPos: new THREE.Vector3(),
-      smoothWorldQuat: new THREE.Quaternion(),
-      frozenAnchorMatrix: new THREE.Matrix4(),
-      hasFrozenMatrix: false,
-      poseReady: false,
-      trackingLive: false,
-    });
+    anchor.group.add(marker);
+    slots.push({ anchor, marker, attachRig, targetIndex: i, experience: exp });
   }
 
   scene.add(new THREE.AmbientLight(0xffffff, 1.65));
@@ -1231,11 +1206,7 @@ async function initAR() {
   let orientationBusy = false;
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
-  let lockedSlot = null;
-  let sessionTargetIndex = null;
-  let modelRevealed = false;
-  let lastTrackAt = 0;
-  let recoverTimer = null;
+  let stickyTargetIndex = null;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1244,72 +1215,6 @@ async function initAR() {
     if (!slot) return;
     slot.attachRig.position.set(0, position.getYOffset(), 0);
     slot.attachRig.scale.setScalar(zoom.getZoom());
-  };
-
-  const resetSlotPose = (slot) => {
-    if (!slot) return;
-    slot.poseReady = false;
-    slot.stableRig.position.set(0, 0, 0);
-    slot.stableRig.quaternion.identity();
-    slot.stableRig.scale.set(1, 1, 1);
-  };
-
-  const captureAnchorPose = (slot) => {
-    if (!slot) return;
-    slot.anchor.group.updateMatrixWorld(true);
-    slot.frozenAnchorMatrix.copy(slot.anchor.group.matrix);
-    slot.hasFrozenMatrix = true;
-  };
-
-  const applyFrozenAnchor = (slot) => {
-    if (!slot?.hasFrozenMatrix) return;
-    slot.anchor.group.visible = true;
-    slot.anchor.group.matrix.copy(slot.frozenAnchorMatrix);
-  };
-
-  const keepModelVisible = () => {
-    if (!modelRevealed || !activeRegistry?.holder) return;
-    activeRegistry.holder.visible = true;
-    activeRegistry.holder.traverse((child) => {
-      child.visible = true;
-      if (child.isSkinnedMesh) child.frustumCulled = false;
-    });
-  };
-
-  const applyPoseSmoothing = (slot) => {
-    if (!slot || !slot.trackingLive || !found.has(slot)) return;
-
-    const anchor = slot.anchor.group;
-    anchor.updateMatrixWorld(true);
-    anchor.getWorldPosition(_poseTmp.pos);
-    anchor.getWorldQuaternion(_poseTmp.quat);
-
-    const alpha = AR_SETTINGS.poseSmooth ?? 0.22;
-    const maxStep = AR_SETTINGS.poseMaxStep ?? 0.006;
-
-    if (!slot.poseReady) {
-      slot.smoothWorldPos.copy(_poseTmp.pos);
-      slot.smoothWorldQuat.copy(_poseTmp.quat);
-      slot.poseReady = true;
-      slot.stableRig.position.set(0, 0, 0);
-      slot.stableRig.quaternion.identity();
-      return;
-    }
-
-    const prevPos = slot.smoothWorldPos.clone();
-    slot.smoothWorldPos.lerp(_poseTmp.pos, alpha);
-    slot.smoothWorldQuat.slerp(_poseTmp.quat, alpha);
-
-    const step = slot.smoothWorldPos.distanceTo(prevPos);
-    if (step > maxStep) {
-      slot.smoothWorldPos.lerpVectors(prevPos, slot.smoothWorldPos, maxStep / step);
-    }
-
-    _poseTmp.mat.compose(slot.smoothWorldPos, slot.smoothWorldQuat, _poseTmp.scale);
-    _poseTmp.inv.copy(anchor.matrixWorld).invert();
-    _poseTmp.local.multiplyMatrices(_poseTmp.inv, _poseTmp.mat);
-    _poseTmp.local.decompose(slot.stableRig.position, slot.stableRig.quaternion, _poseTmp.decomp);
-    slot.stableRig.scale.set(1, 1, 1);
   };
 
   const hideAllHolders = () => {
@@ -1512,16 +1417,8 @@ async function initAR() {
       hideAllHolders();
       found.clear();
       clearTimeout(hideTimer);
-      clearTimeout(recoverTimer);
       activeSlot = null;
-      sessionTargetIndex = null;
-      lockedSlot = null;
-      modelRevealed = false;
-      lastTrackAt = 0;
-      slots.forEach((s) => {
-        resetSlotPose(s);
-        s.hasFrozenMatrix = false;
-      });
+      stickyTargetIndex = null;
 
       await mindar.stop();
       await new Promise((r) => setTimeout(r, 120));
@@ -1603,86 +1500,43 @@ async function initAR() {
   };
 
   const pickActive = () => {
-    if (sessionTargetIndex !== null) {
-      const slot = slots.find((s) => s.targetIndex === sessionTargetIndex);
-      if (slot && found.has(slot)) {
-        slot.trackingLive = true;
-        lockedSlot = slot;
-        lastTrackAt = Date.now();
-        if (activeSlot !== slot) void setActive(slot);
-        return;
-      }
-      if (modelRevealed && slot) {
-        slot.trackingLive = false;
-        return;
-      }
-    }
+    const order = stickyTargetIndex !== null
+      ? [stickyTargetIndex]
+      : TARGET_PRIORITY;
 
-    for (const idx of TARGET_PRIORITY) {
+    for (const idx of order) {
       const slot = slots.find((s) => s.targetIndex === idx && found.has(s));
       if (slot) {
-        sessionTargetIndex = idx;
-        lockedSlot = slot;
-        slot.trackingLive = true;
-        lastTrackAt = Date.now();
-        modelRevealed = true;
-        resetSlotPose(slot);
         void setActive(slot);
         return;
       }
     }
-
-    if (!modelRevealed) {
-      lockedSlot = null;
-      void setActive(null);
-    }
+    void setActive(null);
   };
 
   slots.forEach((slot) => {
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
-      clearTimeout(recoverTimer);
       found.add(slot);
-      captureAnchorPose(slot);
-
-      const sessionBlocked = sessionTargetIndex !== null
-        && slot.targetIndex !== sessionTargetIndex
-        && Date.now() - lastTrackAt < (AR_SETTINGS.targetRecoverMs ?? 3500);
-
-      if (!sessionBlocked) {
-        if (sessionTargetIndex !== null && slot.targetIndex !== sessionTargetIndex) {
-          sessionTargetIndex = slot.targetIndex;
-          resetSlotPose(slot);
-        }
-        if (sessionTargetIndex === null) {
-          sessionTargetIndex = slot.targetIndex;
-          resetSlotPose(slot);
-        }
-        slot.trackingLive = true;
-        lastTrackAt = Date.now();
-        modelRevealed = true;
+      if (stickyTargetIndex === null) {
+        stickyTargetIndex = slot.targetIndex;
       }
-
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
       pickActive();
-      void ensureActiveVisible();
     };
     slot.anchor.onTargetLost = () => {
-      captureAnchorPose(slot);
       found.delete(slot);
-      if (slot.targetIndex === sessionTargetIndex) {
-        slot.trackingLive = false;
+      if (activeSlot === slot) {
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => {
+          if (!found.has(slot)) {
+            stickyTargetIndex = null;
+            pickActive();
+          }
+        }, AR_SETTINGS.targetLostDelayMs);
       }
-
-      clearTimeout(recoverTimer);
-      recoverTimer = setTimeout(() => {
-        if (!slots.some((s) => s.targetIndex === sessionTargetIndex && found.has(s))) {
-          sessionTargetIndex = null;
-          lockedSlot = null;
-        }
-      }, AR_SETTINGS.targetRecoverMs ?? 3500);
     };
   });
 
@@ -1728,15 +1582,7 @@ async function initAR() {
     try {
       await mindar.start();
       arRunning = true;
-      sessionTargetIndex = null;
-      lockedSlot = null;
-      modelRevealed = false;
-      lastTrackAt = 0;
-      clearTimeout(recoverTimer);
-      slots.forEach((s) => {
-        resetSlotPose(s);
-        s.hasFrozenMatrix = false;
-      });
+      stickyTargetIndex = null;
       lastLandscape = isLandscape();
       resizeAR();
       applyMarkerOffsets();
@@ -1761,16 +1607,7 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
-        if (activeSlot) {
-          if (activeSlot.trackingLive && found.has(activeSlot)) {
-            applyPoseSmoothing(activeSlot);
-            captureAnchorPose(activeSlot);
-          } else if (modelRevealed) {
-            applyFrozenAnchor(activeSlot);
-          }
-        }
-        keepModelVisible();
-        if (activeRegistry?.anim && activeSlot) {
+        if (activeRegistry?.anim && activeRegistry.holder.visible) {
           activeRegistry.anim.update(delta);
         }
         renderer.render(scene, camera);
