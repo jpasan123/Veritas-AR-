@@ -1,6 +1,8 @@
 /**
  * Veritas AR — scan banner to see Sri Lanka diorama with walking elephant.
  */
+const BANNER_ASPECT = 860 / 541;
+
 const LOCATIONS = {
   'veritas-ar': {
     id: 'veritas-ar',
@@ -9,14 +11,15 @@ const LOCATIONS = {
     modelSrcMobile: 'assets/veritas-ar-ready-mobile.glb',
     modelScale: 0.48,
     modelOffset: { x: 0, y: 0, z: 0.02 },
-    targetOffsets: {
-      0: { x: 0, y: 0.06, z: 0.02 },
-      1: { x: 0, y: -0.14, z: 0.02 },
-      2: { x: 0, y: -0.05, z: 0.02 },
+    bannerAspect: BANNER_ASPECT,
+    targetCropCenterY: {
+      0: 0.47,
+      1: 0.50,
+      2: 0.66,
     },
     fitMode: 'center',
     fitBounds: 'diorama',
-    fitCenterY: 0.36,
+    fitCenterY: 0.40,
     fitLift: 0.35,
     preloadRequired: true,
     playAnimation: true,
@@ -27,11 +30,6 @@ const LOCATIONS = {
     defaultUserYOffset: 0,
     landscape: {
       modelOffset: { x: 0, y: 0, z: 0.02 },
-      targetOffsets: {
-        0: { x: 0, y: 0.04, z: 0.02 },
-        1: { x: 0, y: -0.12, z: 0.02 },
-        2: { x: 0, y: -0.04, z: 0.02 },
-      },
       defaultUserYOffset: 0,
     },
   },
@@ -41,7 +39,7 @@ export const MODES = {
   all: {
     targetSrc: 'targets.mind',
     experiences: [LOCATIONS['veritas-ar']],
-    targetPriority: [0, 1, 2],
+    targetPriority: [1, 0, 2],
     facadeTargetIndices: [],
   },
 };

@@ -58,12 +58,24 @@ const getMarkerOffset = (exp, targetIndex = 0) => {
   const base = landscape && exp.landscape?.modelOffset
     ? exp.landscape.modelOffset
     : (exp.modelOffset ?? { x: 0, y: 0, z: 0 });
+
+  let bannerCenterY = 0;
+  const aspect = exp.bannerAspect;
+  const cropY = exp.targetCropCenterY?.[targetIndex];
+  if (aspect && cropY != null) {
+    bannerCenterY = (0.5 - cropY) * aspect;
+  }
+
   const perTargetMap = landscape && exp.landscape?.targetOffsets
     ? exp.landscape.targetOffsets
     : exp.targetOffsets;
-  const perTarget = perTargetMap?.[targetIndex];
-  if (!perTarget) return { ...base };
-  return { ...base, ...perTarget };
+  const perTarget = perTargetMap?.[targetIndex] ?? {};
+
+  return {
+    x: (base.x ?? 0) + (perTarget.x ?? 0),
+    y: (base.y ?? 0) + bannerCenterY + (perTarget.y ?? 0),
+    z: (base.z ?? 0) + (perTarget.z ?? 0),
+  };
 };
 
 const getDefaultYOffset = (exp) => {
