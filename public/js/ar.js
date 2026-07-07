@@ -1171,17 +1171,40 @@ async function initAR() {
   configureRenderer(renderer);
 
   const slots = [];
+  const _poseTmp = {
+    pos: new THREE.Vector3(),
+    quat: new THREE.Quaternion(),
+    mat: new THREE.Matrix4(),
+    inv: new THREE.Matrix4(),
+    local: new THREE.Matrix4(),
+    scale: new THREE.Vector3(1, 1, 1),
+    decomp: new THREE.Vector3(),
+  };
+
   for (let i = 0; i < slotCount; i++) {
     const exp = experienceForTarget(EXPERIENCES, i);
     const anchor = mindar.addAnchor(i);
+    const stableRig = new THREE.Group();
+    stableRig.name = 'stable-rig';
     const marker = new THREE.Object3D();
     const attachRig = new THREE.Group();
     attachRig.name = 'attach-rig';
     const off = getMarkerOffset(exp, i);
     marker.position.set(off.x, off.y, off.z);
     marker.add(attachRig);
-    anchor.group.add(marker);
-    slots.push({ anchor, marker, attachRig, targetIndex: i, experience: exp });
+    stableRig.add(marker);
+    anchor.group.add(stableRig);
+    slots.push({
+      anchor,
+      stableRig,
+      marker,
+      attachRig,
+      targetIndex: i,
+      experience: exp,
+      smoothWorldPos: new THREE.Vector3(),
+      smoothWorldQuat: new THREE.Quaternion(),
+      poseReady: false,
+    });
   }
 
   scene.add(new THREE.AmbientLight(0xffffff, 1.65));
@@ -1206,6 +1229,7 @@ async function initAR() {
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
   let lockedSlot = null;
+  let sessionTargetIndex = null;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1214,6 +1238,50 @@ async function initAR() {
     if (!slot) return;
     slot.attachRig.position.set(0, position.getYOffset(), 0);
     slot.attachRig.scale.setScalar(zoom.getZoom());
+  };
+
+  const resetSlotPose = (slot) => {
+    if (!slot) return;
+    slot.poseReady = false;
+    slot.stableRig.position.set(0, 0, 0);
+    slot.stableRig.quaternion.identity();
+    slot.stableRig.scale.set(1, 1, 1);
+  };
+
+  const applyPoseSmoothing = (slot) => {
+    if (!slot || !found.has(slot)) return;
+
+    const anchor = slot.anchor.group;
+    anchor.updateMatrixWorld(true);
+    anchor.getWorldPosition(_poseTmp.pos);
+    anchor.getWorldQuaternion(_poseTmp.quat);
+
+    const alpha = AR_SETTINGS.poseSmooth ?? 0.22;
+    const maxStep = AR_SETTINGS.poseMaxStep ?? 0.006;
+
+    if (!slot.poseReady) {
+      slot.smoothWorldPos.copy(_poseTmp.pos);
+      slot.smoothWorldQuat.copy(_poseTmp.quat);
+      slot.poseReady = true;
+      slot.stableRig.position.set(0, 0, 0);
+      slot.stableRig.quaternion.identity();
+      return;
+    }
+
+    const prevPos = slot.smoothWorldPos.clone();
+    slot.smoothWorldPos.lerp(_poseTmp.pos, alpha);
+    slot.smoothWorldQuat.slerp(_poseTmp.quat, alpha);
+
+    const step = slot.smoothWorldPos.distanceTo(prevPos);
+    if (step > maxStep) {
+      slot.smoothWorldPos.lerpVectors(prevPos, slot.smoothWorldPos, maxStep / step);
+    }
+
+    _poseTmp.mat.compose(slot.smoothWorldPos, slot.smoothWorldQuat, _poseTmp.scale);
+    _poseTmp.inv.copy(anchor.matrixWorld).invert();
+    _poseTmp.local.multiplyMatrices(_poseTmp.inv, _poseTmp.mat);
+    _poseTmp.local.decompose(slot.stableRig.position, slot.stableRig.quaternion, _poseTmp.decomp);
+    slot.stableRig.scale.set(1, 1, 1);
   };
 
   const hideAllHolders = () => {
@@ -1416,6 +1484,9 @@ async function initAR() {
       found.clear();
       clearTimeout(hideTimer);
       activeSlot = null;
+      sessionTargetIndex = null;
+      lockedSlot = null;
+      slots.forEach(resetSlotPose);
 
       await mindar.stop();
       await new Promise((r) => setTimeout(r, 120));
@@ -1497,15 +1568,22 @@ async function initAR() {
   };
 
   const pickActive = () => {
-    if (lockedSlot && found.has(lockedSlot)) {
-      if (activeSlot !== lockedSlot) void setActive(lockedSlot);
+    if (sessionTargetIndex !== null) {
+      const slot = slots.find((s) => s.targetIndex === sessionTargetIndex);
+      if (slot && found.has(slot)) {
+        lockedSlot = slot;
+        if (activeSlot !== slot) void setActive(slot);
+        return;
+      }
       return;
     }
 
     for (const idx of TARGET_PRIORITY) {
       const slot = slots.find((s) => s.targetIndex === idx && found.has(s));
       if (slot) {
+        sessionTargetIndex = idx;
         lockedSlot = slot;
+        resetSlotPose(slot);
         void setActive(slot);
         return;
       }
@@ -1517,8 +1595,16 @@ async function initAR() {
 
   slots.forEach((slot) => {
     slot.anchor.onTargetFound = () => {
+      if (sessionTargetIndex !== null && slot.targetIndex !== sessionTargetIndex) return;
+
       clearTimeout(hideTimer);
       found.add(slot);
+
+      if (sessionTargetIndex === null) {
+        sessionTargetIndex = slot.targetIndex;
+        resetSlotPose(slot);
+      }
+
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
@@ -1527,11 +1613,16 @@ async function initAR() {
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
-      if (slot === lockedSlot) lockedSlot = null;
+      if (sessionTargetIndex !== null && slot.targetIndex !== sessionTargetIndex) return;
+
       if (activeSlot === slot) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
-          if (!found.has(slot)) pickActive();
+          const sessionSlot = slots.find((s) => s.targetIndex === sessionTargetIndex);
+          if (!sessionSlot || !found.has(sessionSlot)) {
+            hideAllHolders();
+            hide('ar-controls');
+          }
         }, AR_SETTINGS.targetLostDelayMs);
       }
     };
@@ -1579,6 +1670,9 @@ async function initAR() {
     try {
       await mindar.start();
       arRunning = true;
+      sessionTargetIndex = null;
+      lockedSlot = null;
+      slots.forEach(resetSlotPose);
       lastLandscape = isLandscape();
       resizeAR();
       applyMarkerOffsets();
@@ -1603,6 +1697,7 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
+        if (activeSlot && found.has(activeSlot)) applyPoseSmoothing(activeSlot);
         if (activeRegistry?.anim && activeSlot && found.has(activeSlot)) {
           activeRegistry.anim.update(delta);
         }
