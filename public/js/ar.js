@@ -18,6 +18,13 @@ function resolveModelSrc(exp) {
   return exp.modelSrc;
 }
 
+function modelSrcCandidates(exp) {
+  if (!exp) return [];
+  const primary = resolveModelSrc(exp);
+  const fallbacks = Array.isArray(exp.modelSrcFallbacks) ? exp.modelSrcFallbacks : [];
+  return [...new Set([primary, ...fallbacks].filter(Boolean))];
+}
+
 function isLowEndDevice() {
   if (!IS_ANDROID) return false;
   const mem = navigator.deviceMemory;
@@ -472,7 +479,7 @@ function prepareModel(scene) {
 }
 
 async function loadModelAsset(src, onProgress) {
-  const attempts = IS_ANDROID ? 3 : 1;
+  const attempts = IS_PHONE ? 3 : 1;
   let lastErr;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -504,7 +511,17 @@ async function loadModelAsset(src, onProgress) {
 }
 
 async function loadModelForExperience(exp, onProgress) {
-  return loadModelAsset(resolveModelSrc(exp), onProgress);
+  const candidates = modelSrcCandidates(exp);
+  let lastErr;
+  for (const src of candidates) {
+    try {
+      return await loadModelAsset(src, onProgress);
+    } catch (err) {
+      lastErr = err;
+      console.warn('[AR] Model candidate failed:', src, err);
+    }
+  }
+  throw lastErr ?? new Error('No model source available');
 }
 
 async function buildExperience(exp, slot, onProgress) {
@@ -1160,6 +1177,8 @@ async function initAR() {
       uiError: 'no',
       filterMinCF: AR_SETTINGS.filterMinCF,
       filterBeta: AR_SETTINGS.filterBeta,
+      missTolerance: AR_SETTINGS.missTolerance,
+      warmupTolerance: AR_SETTINGS.warmupTolerance,
     });
   } catch (err) {
     showError('AR failed to load.');
@@ -1182,7 +1201,15 @@ async function initAR() {
     marker.position.set(off.x, off.y, off.z);
     marker.add(attachRig);
     anchor.group.add(marker);
-    slots.push({ anchor, marker, attachRig, targetIndex: i, experience: exp });
+    slots.push({
+      anchor,
+      marker,
+      attachRig,
+      targetIndex: i,
+      experience: exp,
+      frozenAttachWorld: new THREE.Matrix4(),
+      hasFrozenPose: false,
+    });
   }
 
   scene.add(new THREE.AmbientLight(0xffffff, 1.65));
@@ -1217,6 +1244,29 @@ async function initAR() {
     slot.attachRig.scale.setScalar(zoom.getZoom());
   };
 
+  const syncSceneHolder = () => {
+    if (!activeSlot || !activeRegistry?.holder?.visible) return;
+
+    const holder = activeRegistry.holder;
+    const slot = activeSlot;
+
+    if (found.has(slot)) {
+      slot.attachRig.updateMatrixWorld(true);
+      slot.frozenAttachWorld.copy(slot.attachRig.matrixWorld);
+      slot.hasFrozenPose = true;
+    }
+
+    if (!slot.hasFrozenPose) return;
+
+    if (holder.parent !== scene) {
+      scene.attach(holder);
+    }
+
+    holder.matrix.copy(slot.frozenAttachWorld);
+    holder.matrix.decompose(holder.position, holder.quaternion, holder.scale);
+    holder.matrixAutoUpdate = false;
+  };
+
   const hideAllHolders = () => {
     if (!expRegistry) return;
     expRegistry.forEach((entry) => {
@@ -1224,6 +1274,9 @@ async function initAR() {
       entry.anim?.pause();
     });
     activeRegistry = null;
+    slots.forEach((s) => {
+      s.hasFrozenPose = false;
+    });
   };
 
   const showExperience = (expId) => {
@@ -1525,6 +1578,7 @@ async function initAR() {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
       pickActive();
+      void ensureActiveVisible();
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
@@ -1578,6 +1632,18 @@ async function initAR() {
   const startBtn = $('start-btn');
 
   startBtn.onclick = async () => {
+    setLoadStatus('Loading 3D model…');
+    try {
+      await modelReady;
+    } catch (err) {
+      console.error('Model preload failed:', err);
+    }
+    if (!expRegistry.size) {
+      setLoadStatus('Model failed to load. Check Wi‑Fi and refresh.');
+      show('start-screen');
+      return;
+    }
+
     hide('start-screen');
     try {
       await mindar.start();
@@ -1607,6 +1673,7 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
+        syncSceneHolder();
         if (activeRegistry?.anim && activeRegistry.holder.visible) {
           activeRegistry.anim.update(delta);
         }
