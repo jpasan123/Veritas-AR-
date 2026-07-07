@@ -613,7 +613,10 @@ function fitModel(model, modelScale, fitMode = 'ground', fitLift, fitBounds, fit
   }
 
   let scaleBase;
-  if (fitMode === 'facade' || fitMode === 'center') {
+  if (fitBounds === 'diorama') {
+    // Keep banner size stable when switching center vs ground positioning.
+    scaleBase = Math.max(size.x, size.y, size.z);
+  } else if (fitMode === 'facade' || fitMode === 'center') {
     scaleBase = Math.max(size.x, size.y * (fitHeightFactor ?? 0.88));
   } else {
     scaleBase = Math.max(size.x, size.y, size.z);
