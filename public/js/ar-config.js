@@ -40,7 +40,7 @@ const LOCATIONS = {
 
 export const MODES = {
   all: {
-    targetSrc: 'targets.mind?v=82',
+    targetSrc: 'targets.mind?v=83',
     experiences: [LOCATIONS['veritas-ar']],
     targetPriority: [0],
     facadeTargetIndices: [],
@@ -57,10 +57,10 @@ export const AR_SETTINGS = {
   maxUserYOffset: 0.35,
   positionStep: 0.06,
   targetLostDelayMs: 2800,
-  filterMinCF: 0.001,
-  filterBeta: 0.0008,
+  filterMinCF: 0.004,
+  filterBeta: 0.001,
   missTolerance: 25,
-  warmupTolerance: 2,
+  warmupTolerance: 0,
   minCameraZoom: 1,
   maxCameraZoom: 3,
   cameraZoomStep: 0.25,

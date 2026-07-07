@@ -1300,17 +1300,9 @@ async function initAR() {
     }
   };
 
-  const mountToSlot = async (slot, expId) => {
-    if (!slot) return false;
-    if (!expRegistry.has(expId)) {
-      pendingActiveSlot = slot;
-      const ok = await ensureExperienceLoaded(expId);
-      if (!ok) return false;
-      pendingActiveSlot = null;
-    }
-
+  const revealToSlot = (slot, expId) => {
     const entry = expRegistry.get(expId);
-    if (!entry) return false;
+    if (!slot || !entry) return false;
 
     if (entry.holder.parent !== slot.attachRig) {
       slot.attachRig.add(entry.holder);
@@ -1324,8 +1316,36 @@ async function initAR() {
       if (child.isSkinnedMesh) child.frustumCulled = false;
     });
     applyUserTransform(slot);
+    return true;
+  };
+
+  const mountToSlot = async (slot, expId) => {
+    if (!slot) return false;
+    if (expRegistry.has(expId)) {
+      revealToSlot(slot, expId);
+      setLoadStatus('');
+      return true;
+    }
+
+    pendingActiveSlot = slot;
+    const ok = await ensureExperienceLoaded(expId);
+    pendingActiveSlot = null;
+    if (!ok) return false;
+
+    revealToSlot(slot, expId);
     setLoadStatus('');
     return true;
+  };
+
+  const primeMountedHolders = () => {
+    expRegistry.forEach((entry, expId) => {
+      const slot = slotByExp.get(expId);
+      if (!slot) return;
+      if (entry.holder.parent !== slot.attachRig) {
+        slot.attachRig.add(entry.holder);
+      }
+      entry.holder.visible = false;
+    });
   };
 
   const ensureActiveVisible = async () => {
@@ -1352,6 +1372,7 @@ async function initAR() {
           setLoadStatus('Model failed to load. Check Wi‑Fi and refresh.');
           return;
         }
+        primeMountedHolders();
       } catch (err) {
         console.error('Model load failed:', err);
         setLoadStatus('Model failed to load. Check Wi‑Fi and refresh.');
@@ -1360,7 +1381,7 @@ async function initAR() {
     }
     hide('loading-screen');
     show('start-screen');
-    setLoadStatus('Ready — tap to start');
+    setLoadStatus('Ready — stand 0.5–2 m from banner, tap to start');
   };
 
   if (forcePreload || (IS_ANDROID && setup.mode !== 'all')) {
@@ -1378,6 +1399,7 @@ async function initAR() {
         setLoadStatus(`Loading 3D model… ${Math.round(pct * 100)}%`);
       }).then((registry) => {
         expRegistry = registry;
+        primeMountedHolders();
         setLoadStatus('');
         if (pendingActiveSlot) {
           const slot = pendingActiveSlot;
@@ -1512,6 +1534,13 @@ async function initAR() {
 
     activeSlot = slot;
     applyMarkerOffsets(slot);
+
+    if (expRegistry.has(slot.experience.id)) {
+      revealToSlot(slot, slot.experience.id);
+      show('ar-controls');
+      return;
+    }
+
     const mounted = await mountToSlot(slot, slot.experience.id);
     if (mounted) show('ar-controls');
   };
@@ -1528,13 +1557,27 @@ async function initAR() {
   };
 
   slots.forEach((slot) => {
+    const instantReveal = () => {
+      if (!slot.experience?.id || !expRegistry.has(slot.experience.id)) return;
+      clearTimeout(hideTimer);
+      if (!found.has(slot)) found.add(slot);
+      activeSlot = slot;
+      applyMarkerOffsets(slot);
+      revealToSlot(slot, slot.experience.id);
+      show('ar-controls');
+    };
+
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
       found.add(slot);
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
+      instantReveal();
       pickActive();
+    };
+    slot.anchor.onTargetUpdate = () => {
+      if (!activeRegistry?.holder?.visible) instantReveal();
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
@@ -1605,6 +1648,7 @@ async function initAR() {
       resizeAR();
       applyMarkerOffsets();
       show('camera-controls');
+      setLoadStatus('Point at banner — hold steady 1 sec');
       window.dispatchEvent(new CustomEvent('ar:started', { detail: { mode: setup.mode } }));
       const video = getVideo();
       if (video) {
