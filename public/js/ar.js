@@ -1164,7 +1164,7 @@ async function initAR() {
   prefetchModels(EXPERIENCES);
 
   const slotCount = targetCount(EXPERIENCES);
-  const maxTrack = 2;
+  const maxTrack = 1;
   const forcePreload = EXPERIENCES.some((e) => e.preloadRequired);
   let mindar;
   try {
@@ -1201,15 +1201,7 @@ async function initAR() {
     marker.position.set(off.x, off.y, off.z);
     marker.add(attachRig);
     anchor.group.add(marker);
-    slots.push({
-      anchor,
-      marker,
-      attachRig,
-      targetIndex: i,
-      experience: exp,
-      frozenAttachWorld: new THREE.Matrix4(),
-      hasFrozenPose: false,
-    });
+    slots.push({ anchor, marker, attachRig, targetIndex: i, experience: exp });
   }
 
   scene.add(new THREE.AmbientLight(0xffffff, 1.65));
@@ -1233,7 +1225,6 @@ async function initAR() {
   let orientationBusy = false;
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
-  let stickyTargetIndex = null;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1244,29 +1235,6 @@ async function initAR() {
     slot.attachRig.scale.setScalar(zoom.getZoom());
   };
 
-  const syncSceneHolder = () => {
-    if (!activeSlot || !activeRegistry?.holder?.visible) return;
-
-    const holder = activeRegistry.holder;
-    const slot = activeSlot;
-
-    if (found.has(slot)) {
-      slot.attachRig.updateMatrixWorld(true);
-      slot.frozenAttachWorld.copy(slot.attachRig.matrixWorld);
-      slot.hasFrozenPose = true;
-    }
-
-    if (!slot.hasFrozenPose) return;
-
-    if (holder.parent !== scene) {
-      scene.attach(holder);
-    }
-
-    holder.matrix.copy(slot.frozenAttachWorld);
-    holder.matrix.decompose(holder.position, holder.quaternion, holder.scale);
-    holder.matrixAutoUpdate = false;
-  };
-
   const hideAllHolders = () => {
     if (!expRegistry) return;
     expRegistry.forEach((entry) => {
@@ -1274,9 +1242,6 @@ async function initAR() {
       entry.anim?.pause();
     });
     activeRegistry = null;
-    slots.forEach((s) => {
-      s.hasFrozenPose = false;
-    });
   };
 
   const showExperience = (expId) => {
@@ -1471,7 +1436,6 @@ async function initAR() {
       found.clear();
       clearTimeout(hideTimer);
       activeSlot = null;
-      stickyTargetIndex = null;
 
       await mindar.stop();
       await new Promise((r) => setTimeout(r, 120));
@@ -1553,20 +1517,13 @@ async function initAR() {
   };
 
   const pickActive = () => {
-    const order = stickyTargetIndex !== null
-      ? [stickyTargetIndex]
-      : TARGET_PRIORITY;
-
-    for (const idx of order) {
+    for (const idx of TARGET_PRIORITY) {
       const slot = slots.find((s) => s.targetIndex === idx && found.has(s));
       if (slot) {
         void setActive(slot);
         return;
       }
     }
-
-    if (hideTimer && activeSlot && activeRegistry?.holder?.visible) return;
-
     void setActive(null);
   };
 
@@ -1574,24 +1531,17 @@ async function initAR() {
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
       found.add(slot);
-      if (stickyTargetIndex === null) {
-        stickyTargetIndex = slot.targetIndex;
-      }
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
       pickActive();
-      void ensureActiveVisible();
     };
     slot.anchor.onTargetLost = () => {
       found.delete(slot);
       if (activeSlot === slot) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
-          if (!found.has(slot)) {
-            stickyTargetIndex = null;
-            pickActive();
-          }
+          if (!found.has(slot)) pickActive();
         }, AR_SETTINGS.targetLostDelayMs);
       }
     };
@@ -1651,7 +1601,6 @@ async function initAR() {
     try {
       await mindar.start();
       arRunning = true;
-      stickyTargetIndex = null;
       lastLandscape = isLandscape();
       resizeAR();
       applyMarkerOffsets();
@@ -1676,7 +1625,6 @@ async function initAR() {
       const clock = new THREE.Clock();
       renderLoop = () => {
         const delta = Math.min(clock.getDelta(), 0.032);
-        syncSceneHolder();
         if (activeRegistry?.anim && activeRegistry.holder.visible) {
           activeRegistry.anim.update(delta);
         }
