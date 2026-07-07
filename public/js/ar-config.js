@@ -1,12 +1,12 @@
 /**
  * Veritas AR — scan banner to see Sri Lanka diorama with walking elephant.
  */
-const BANNER_ASPECT = 860 / 541;
+const BANNER_ASPECT = 860 / 541; // panel 541×860 from physical photo
 
 const LOCATIONS = {
   'veritas-ar': {
     id: 'veritas-ar',
-    targetIndices: [0, 1, 2],
+    targetIndices: [0, 1],
     modelSrc: 'assets/veritas-ar-ready.glb',
     modelSrcMobile: 'assets/veritas-ar-ready-mobile.glb',
     modelSrcFallbacks: [
@@ -20,11 +20,10 @@ const LOCATIONS = {
     targetCropCenterY: {
       0: 0.47,
       1: 0.50,
-      2: 0.66,
     },
     fitMode: 'center',
     fitBounds: 'diorama',
-    fitCenterY: 0.40,
+    fitCenterY: 0.43,
     fitLift: 0.35,
     preloadRequired: true,
     playAnimation: true,
@@ -42,9 +41,9 @@ const LOCATIONS = {
 
 export const MODES = {
   all: {
-    targetSrc: 'targets.mind',
+    targetSrc: 'targets.mind?v=81',
     experiences: [LOCATIONS['veritas-ar']],
-    targetPriority: [1, 0, 2],
+    targetPriority: [0, 1],
     facadeTargetIndices: [],
   },
 };
@@ -58,11 +57,11 @@ export const AR_SETTINGS = {
   minUserYOffset: -0.2,
   maxUserYOffset: 0.35,
   positionStep: 0.06,
-  targetLostDelayMs: 3000,
-  filterMinCF: 0.0004,
-  filterBeta: 0.0006,
-  missTolerance: 18,
-  warmupTolerance: 3,
+  targetLostDelayMs: 3500,
+  filterMinCF: 0.0008,
+  filterBeta: 0.0007,
+  missTolerance: 22,
+  warmupTolerance: 4,
   minCameraZoom: 1,
   maxCameraZoom: 3,
   cameraZoomStep: 0.25,

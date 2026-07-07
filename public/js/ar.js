@@ -1564,6 +1564,9 @@ async function initAR() {
         return;
       }
     }
+
+    if (hideTimer && activeSlot && activeRegistry?.holder?.visible) return;
+
     void setActive(null);
   };
 
