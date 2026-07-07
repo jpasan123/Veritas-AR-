@@ -6,7 +6,7 @@ const BANNER_ASPECT = 860 / 541; // panel 541×860 from physical photo
 const LOCATIONS = {
   'veritas-ar': {
     id: 'veritas-ar',
-    targetIndices: [0],
+    targetIndices: [0, 1],
     modelSrc: 'assets/veritas-ar-ready.glb',
     modelSrcMobile: 'assets/veritas-ar-ready-mobile.glb',
     modelSrcFallbacks: [
@@ -19,6 +19,7 @@ const LOCATIONS = {
     bannerAspect: BANNER_ASPECT,
     targetCropCenterY: {
       0: 0.50,
+      1: 0.47,
     },
     fitMode: 'center',
     fitBounds: 'diorama',
@@ -40,9 +41,9 @@ const LOCATIONS = {
 
 export const MODES = {
   all: {
-    targetSrc: 'targets.mind?v=83',
+    targetSrc: 'targets.mind?v=84',
     experiences: [LOCATIONS['veritas-ar']],
-    targetPriority: [0],
+    targetPriority: [1, 0],
     facadeTargetIndices: [],
   },
 };
@@ -56,10 +57,10 @@ export const AR_SETTINGS = {
   minUserYOffset: -0.2,
   maxUserYOffset: 0.35,
   positionStep: 0.06,
-  targetLostDelayMs: 2800,
-  filterMinCF: 0.004,
-  filterBeta: 0.001,
-  missTolerance: 25,
+  targetLostDelayMs: 3200,
+  filterMinCF: 0.0012,
+  filterBeta: 0.0008,
+  missTolerance: 35,
   warmupTolerance: 0,
   minCameraZoom: 1,
   maxCameraZoom: 3,

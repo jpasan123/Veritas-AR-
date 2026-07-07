@@ -1225,6 +1225,7 @@ async function initAR() {
   let orientationBusy = false;
   let lastLandscape = isLandscape();
   let pendingActiveSlot = null;
+  let lockedTargetIndex = null;
 
   const getVideo = () => document.querySelector('#ar-container video');
   const cameraControls = createCameraControls(getVideo);
@@ -1381,7 +1382,7 @@ async function initAR() {
     }
     hide('loading-screen');
     show('start-screen');
-    setLoadStatus('Ready — stand 0.5–2 m from banner, tap to start');
+    setLoadStatus('Ready — 0.5 m to 3 m from banner, tap to start');
   };
 
   if (forcePreload || (IS_ANDROID && setup.mode !== 'all')) {
@@ -1458,6 +1459,7 @@ async function initAR() {
       found.clear();
       clearTimeout(hideTimer);
       activeSlot = null;
+      lockedTargetIndex = null;
 
       await mindar.stop();
       await new Promise((r) => setTimeout(r, 120));
@@ -1546,13 +1548,20 @@ async function initAR() {
   };
 
   const pickActive = () => {
-    for (const idx of TARGET_PRIORITY) {
+    const order = lockedTargetIndex !== null
+      ? [lockedTargetIndex]
+      : TARGET_PRIORITY;
+
+    for (const idx of order) {
       const slot = slots.find((s) => s.targetIndex === idx && found.has(s));
       if (slot) {
         void setActive(slot);
         return;
       }
     }
+
+    if (hideTimer && activeSlot && activeRegistry?.holder?.visible) return;
+
     void setActive(null);
   };
 
@@ -1561,6 +1570,7 @@ async function initAR() {
       if (!slot.experience?.id || !expRegistry.has(slot.experience.id)) return;
       clearTimeout(hideTimer);
       if (!found.has(slot)) found.add(slot);
+      if (lockedTargetIndex === null) lockedTargetIndex = slot.targetIndex;
       activeSlot = slot;
       applyMarkerOffsets(slot);
       revealToSlot(slot, slot.experience.id);
@@ -1570,6 +1580,7 @@ async function initAR() {
     slot.anchor.onTargetFound = () => {
       clearTimeout(hideTimer);
       found.add(slot);
+      if (lockedTargetIndex === null) lockedTargetIndex = slot.targetIndex;
       window.dispatchEvent(new CustomEvent('ar:target_found', {
         detail: { expId: slot.experience?.id || '', targetIndex: slot.targetIndex },
       }));
@@ -1584,7 +1595,10 @@ async function initAR() {
       if (activeSlot === slot) {
         clearTimeout(hideTimer);
         hideTimer = setTimeout(() => {
-          if (!found.has(slot)) pickActive();
+          if (!found.has(slot)) {
+            lockedTargetIndex = null;
+            pickActive();
+          }
         }, AR_SETTINGS.targetLostDelayMs);
       }
     };
@@ -1644,11 +1658,12 @@ async function initAR() {
     try {
       await mindar.start();
       arRunning = true;
+      lockedTargetIndex = null;
       lastLandscape = isLandscape();
       resizeAR();
       applyMarkerOffsets();
       show('camera-controls');
-      setLoadStatus('Point at banner — hold steady 1 sec');
+      setLoadStatus('Point at banner — works 0.5 m to 3 m away');
       window.dispatchEvent(new CustomEvent('ar:started', { detail: { mode: setup.mode } }));
       const video = getVideo();
       if (video) {

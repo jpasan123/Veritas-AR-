@@ -64,10 +64,10 @@ for (const crop of crops) {
 }
 
 await sharp(BANNER)
-  .modulate({ brightness: 1.03, saturation: 1.08 })
+  .modulate({ brightness: 1.05, saturation: 1.12 })
   .normalize()
-  .sharpen({ sigma: 1.0 })
-  .jpeg({ quality: 95, mozjpeg: true })
+  .sharpen({ sigma: 1.45 })
+  .jpeg({ quality: 96, mozjpeg: true })
   .toFile(path.join(OUT, 'banner-enhanced.jpeg'));
 console.log('OK banner-enhanced.jpeg');
 
